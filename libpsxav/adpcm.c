@@ -3,6 +3,7 @@ libpsxav: MDEC video + SPU/XA-ADPCM audio library
 
 Copyright (c) 2019, 2020 Adrian "asie" Siekierka
 Copyright (c) 2019 Ben "GreaseMonkey" Russell
+Copyright (c) 2023 spicyjpeg
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -25,6 +26,9 @@ freely, subject to the following restrictions:
 #include <string.h>
 #include "libpsxav.h"
 
+#define SHIFT_RANGE_4BPS 12
+#define SHIFT_RANGE_8BPS 8
+
 #define ADPCM_FILTER_COUNT 5
 #define XA_ADPCM_FILTER_COUNT 4
 #define SPU_ADPCM_FILTER_COUNT 5
@@ -32,7 +36,7 @@ freely, subject to the following restrictions:
 static const int16_t filter_k1[ADPCM_FILTER_COUNT] = {0, 60, 115, 98, 122};
 static const int16_t filter_k2[ADPCM_FILTER_COUNT] = {0, 0, -52, -55, -60};
 
-static int find_min_shift(const psx_audio_encoder_channel_state_t *state, int16_t *samples, int pitch, int filter) {
+static int find_min_shift(const psx_audio_encoder_channel_state_t *state, int16_t *samples, int sample_limit, int pitch, int filter, int shift_range) {
 	// Assumption made:
 	//
 	// There is value in shifting right one step further to allow the nibbles to clip.
@@ -51,7 +55,7 @@ static int find_min_shift(const psx_audio_encoder_channel_state_t *state, int16_
 	int32_t s_min = 0;
 	int32_t s_max = 0;
 	for (int i = 0; i < 28; i++) {
-		int32_t raw_sample = samples[i * pitch];
+		int32_t raw_sample = (i >= sample_limit) ? 0 : samples[i * pitch];
 		int32_t previous_values = (k1*prev1 + k2*prev2 + (1<<5))>>6;
 		int32_t sample = raw_sample - previous_values;
 		if (sample < s_min) { s_min = sample; }
@@ -59,16 +63,18 @@ static int find_min_shift(const psx_audio_encoder_channel_state_t *state, int16_
 		prev2 = prev1;
 		prev1 = raw_sample;
 	}
-	while(right_shift < 12 && (s_max>>right_shift) > +0x7) { right_shift += 1; };
-	while(right_shift < 12 && (s_min>>right_shift) < -0x8) { right_shift += 1; };
+	while(right_shift < shift_range && (s_max>>right_shift) > (+0x7FFF >> shift_range)) { right_shift += 1; };
+	while(right_shift < shift_range && (s_min>>right_shift) < (-0x8000 >> shift_range)) { right_shift += 1; };
 
-	int min_shift = 12 - right_shift;
-	assert(0 <= min_shift && min_shift <= 12);
+	int min_shift = shift_range - right_shift;
+	assert(0 <= min_shift && min_shift <= shift_range);
 	return min_shift;
 }
 
-static uint8_t attempt_to_encode_nibbles(psx_audio_encoder_channel_state_t *outstate, const psx_audio_encoder_channel_state_t *instate, int16_t *samples, int sample_limit, int pitch, uint8_t *data, int data_shift, int data_pitch, int filter, int sample_shift) {
-	uint8_t nondata_mask = ~(0x0F << data_shift);
+static uint8_t attempt_to_encode(psx_audio_encoder_channel_state_t *outstate, const psx_audio_encoder_channel_state_t *instate, int16_t *samples, int sample_limit, int pitch, uint8_t *data, int data_shift, int data_pitch, int filter, int sample_shift, int shift_range) {
+	uint8_t sample_mask = 0xFFFF >> shift_range;
+	uint8_t nondata_mask = ~(sample_mask << data_shift);
+
 	int min_shift = sample_shift;
 	int k1 = filter_k1[filter];
 	int k2 = filter_k2[filter];
@@ -82,17 +88,17 @@ static uint8_t attempt_to_encode_nibbles(psx_audio_encoder_channel_state_t *outs
 	outstate->mse = 0;
 
 	for (int i = 0; i < 28; i++) {
-		int32_t sample = ((i * pitch) >= sample_limit ? 0 : samples[i * pitch]) + outstate->qerr;
+		int32_t sample = ((i >= sample_limit) ? 0 : samples[i * pitch]) + outstate->qerr;
 		int32_t previous_values = (k1*outstate->prev1 + k2*outstate->prev2 + (1<<5))>>6;
 		int32_t sample_enc = sample - previous_values;
 		sample_enc <<= min_shift;
-		sample_enc += (1<<(12-1));
-		sample_enc >>= 12;
-		if(sample_enc < -8) { sample_enc = -8; }
-		if(sample_enc > +7) { sample_enc = +7; }
-		sample_enc &= 0xF;
+		sample_enc += (1<<(shift_range-1));
+		sample_enc >>= shift_range;
+		if(sample_enc < (-0x8000 >> shift_range)) { sample_enc = -0x8000 >> shift_range; }
+		if(sample_enc > (+0x7FFF >> shift_range)) { sample_enc = +0x7FFF >> shift_range; }
+		sample_enc &= sample_mask;
 
-		int32_t sample_dec = (int16_t) ((sample_enc&0xF) << 12);
+		int32_t sample_dec = (int16_t) ((sample_enc & sample_mask) << shift_range);
 		sample_dec >>= min_shift;
 		sample_dec += previous_values;
 		if (sample_dec > +0x7FFF) { sample_dec = +0x7FFF; }
@@ -114,14 +120,14 @@ static uint8_t attempt_to_encode_nibbles(psx_audio_encoder_channel_state_t *outs
 	return hdr;
 }
 
-static uint8_t encode_nibbles(psx_audio_encoder_channel_state_t *state, int16_t *samples, int sample_limit, int pitch, uint8_t *data, int data_shift, int data_pitch, int filter_count) {
+static uint8_t encode(psx_audio_encoder_channel_state_t *state, int16_t *samples, int sample_limit, int pitch, uint8_t *data, int data_shift, int data_pitch, int filter_count, int shift_range) {
     psx_audio_encoder_channel_state_t proposed;
 	int64_t best_mse = ((int64_t)1<<(int64_t)50);
 	int best_filter = 0;
 	int best_sample_shift = 0;
 
 	for (int filter = 0; filter < filter_count; filter++) {
-		int true_min_shift = find_min_shift(state, samples, pitch, filter);
+		int true_min_shift = find_min_shift(state, samples, sample_limit, pitch, filter, shift_range);
 
 		// Testing has shown that the optimal shift can be off the true minimum shift
 		// by 1 in *either* direction.
@@ -129,15 +135,15 @@ static uint8_t encode_nibbles(psx_audio_encoder_channel_state_t *state, int16_t 
 		int min_shift = true_min_shift - 1;
 		int max_shift = true_min_shift + 1;
 		if (min_shift < 0) { min_shift = 0; }
-		if (max_shift > 12) { max_shift = 12; }
+		if (max_shift > shift_range) { max_shift = shift_range; }
 
 		for (int sample_shift = min_shift; sample_shift <= max_shift; sample_shift++) {
 			// ignore header here
-			attempt_to_encode_nibbles(
+			attempt_to_encode(
 				&proposed, state,
 				samples, sample_limit, pitch,
 				data, data_shift, data_pitch,
-				filter, sample_shift);
+				filter, sample_shift, shift_range);
 
 			if (best_mse > proposed.mse) {
 				best_mse = proposed.mse;
@@ -148,46 +154,46 @@ static uint8_t encode_nibbles(psx_audio_encoder_channel_state_t *state, int16_t 
 	}
 
 	// now go with the encoder
-	return attempt_to_encode_nibbles(
+	return attempt_to_encode(
 		state, state,
 		samples, sample_limit, pitch,
 		data, data_shift, data_pitch,
-		best_filter, best_sample_shift);
+		best_filter, best_sample_shift, shift_range);
 }
 
 static void encode_block_xa(int16_t *audio_samples, int audio_samples_limit, uint8_t *data, psx_audio_xa_settings_t settings, psx_audio_encoder_state_t *state) {
 	if (settings.bits_per_sample == 4) {
 		if (settings.stereo) {
-			data[0]  = encode_nibbles(&(state->left), audio_samples, audio_samples_limit,           2, data + 0x10, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[1]  = encode_nibbles(&(state->right), audio_samples + 1, audio_samples_limit - 1,        2, data + 0x10, 4, 4, XA_ADPCM_FILTER_COUNT);
-			data[2]  = encode_nibbles(&(state->left), audio_samples + 56, audio_samples_limit - 56,       2, data + 0x11, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[3]  = encode_nibbles(&(state->right), audio_samples + 56 + 1, audio_samples_limit - 56 - 1,  2, data + 0x11, 4, 4, XA_ADPCM_FILTER_COUNT);
-			data[8]  = encode_nibbles(&(state->left), audio_samples + 56*2, audio_samples_limit - 56*2,    2, data + 0x12, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[9]  = encode_nibbles(&(state->right), audio_samples + 56*2 + 1, audio_samples_limit - 56*2 - 1, 2, data + 0x12, 4, 4, XA_ADPCM_FILTER_COUNT);
-			data[10] = encode_nibbles(&(state->left), audio_samples + 56*3, audio_samples_limit - 56*3,     2, data + 0x13, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[11] = encode_nibbles(&(state->right), audio_samples + 56*3 + 1, audio_samples_limit - 56*3 - 1, 2, data + 0x13, 4, 4, XA_ADPCM_FILTER_COUNT);
+			data[0]  = encode(&(state->left),  audio_samples,            audio_samples_limit,        2, data + 0x10, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[1]  = encode(&(state->right), audio_samples + 1,        audio_samples_limit,        2, data + 0x10, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[2]  = encode(&(state->left),  audio_samples + 56,       audio_samples_limit - 28,   2, data + 0x11, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[3]  = encode(&(state->right), audio_samples + 56 + 1,   audio_samples_limit - 28,   2, data + 0x11, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[8]  = encode(&(state->left),  audio_samples + 56*2,     audio_samples_limit - 28*2, 2, data + 0x12, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[9]  = encode(&(state->right), audio_samples + 56*2 + 1, audio_samples_limit - 28*2, 2, data + 0x12, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[10] = encode(&(state->left),  audio_samples + 56*3,     audio_samples_limit - 28*3, 2, data + 0x13, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[11] = encode(&(state->right), audio_samples + 56*3 + 1, audio_samples_limit - 28*3, 2, data + 0x13, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
 		} else {
-			data[0]  = encode_nibbles(&(state->left), audio_samples, audio_samples_limit,           1, data + 0x10, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[1]  = encode_nibbles(&(state->right), audio_samples + 28, audio_samples_limit - 28,       1, data + 0x10, 4, 4, XA_ADPCM_FILTER_COUNT);
-			data[2]  = encode_nibbles(&(state->left), audio_samples + 28*2, audio_samples_limit - 28*2,     1, data + 0x11, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[3]  = encode_nibbles(&(state->right), audio_samples + 28*3, audio_samples_limit - 28*3,     1, data + 0x11, 4, 4, XA_ADPCM_FILTER_COUNT);
-			data[8]  = encode_nibbles(&(state->left), audio_samples + 28*4, audio_samples_limit - 28*4,     1, data + 0x12, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[9]  = encode_nibbles(&(state->right), audio_samples + 28*5, audio_samples_limit - 28*5,     1, data + 0x12, 4, 4, XA_ADPCM_FILTER_COUNT);
-			data[10] = encode_nibbles(&(state->left), audio_samples + 28*6, audio_samples_limit - 28*6,     1, data + 0x13, 0, 4, XA_ADPCM_FILTER_COUNT);
-			data[11] = encode_nibbles(&(state->right), audio_samples + 28*7, audio_samples_limit - 28*7,     1, data + 0x13, 4, 4, XA_ADPCM_FILTER_COUNT);
+			data[0]  = encode(&(state->left), audio_samples,        audio_samples_limit,        1, data + 0x10, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[1]  = encode(&(state->left), audio_samples + 28,   audio_samples_limit - 28,   1, data + 0x10, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[2]  = encode(&(state->left), audio_samples + 28*2, audio_samples_limit - 28*2, 1, data + 0x11, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[3]  = encode(&(state->left), audio_samples + 28*3, audio_samples_limit - 28*3, 1, data + 0x11, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[8]  = encode(&(state->left), audio_samples + 28*4, audio_samples_limit - 28*4, 1, data + 0x12, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[9]  = encode(&(state->left), audio_samples + 28*5, audio_samples_limit - 28*5, 1, data + 0x12, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[10] = encode(&(state->left), audio_samples + 28*6, audio_samples_limit - 28*6, 1, data + 0x13, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
+			data[11] = encode(&(state->left), audio_samples + 28*7, audio_samples_limit - 28*7, 1, data + 0x13, 4, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
 		}
 	} else {
-/*		if (settings->stereo) {
-			data[0]  = encode_bytes(audio_samples,            2, data + 0x10);
-			data[1]  = encode_bytes(audio_samples + 1,        2, data + 0x11);
-			data[2]  = encode_bytes(audio_samples + 56,       2, data + 0x12);
-			data[3]  = encode_bytes(audio_samples + 57,       2, data + 0x13);
+		if (settings.stereo) {
+			data[0] = encode(&(state->left),  audio_samples,          audio_samples_limit,      2, data + 0x10, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+			data[1] = encode(&(state->right), audio_samples + 1,      audio_samples_limit,      2, data + 0x11, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+			data[2] = encode(&(state->left),  audio_samples + 56,     audio_samples_limit - 28, 2, data + 0x12, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+			data[3] = encode(&(state->right), audio_samples + 56 + 1, audio_samples_limit - 28, 2, data + 0x13, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
 		} else {
-			data[0]  = encode_bytes(audio_samples,            1, data + 0x10);
-			data[1]  = encode_bytes(audio_samples + 28,       1, data + 0x11);
-			data[2]  = encode_bytes(audio_samples + 56,       1, data + 0x12);
-			data[3]  = encode_bytes(audio_samples + 84,       1, data + 0x13);
-		} */
+			data[0] = encode(&(state->left), audio_samples,        audio_samples_limit,        1, data + 0x10, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+			data[1] = encode(&(state->left), audio_samples + 28,   audio_samples_limit - 28,   1, data + 0x11, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+			data[2] = encode(&(state->left), audio_samples + 28*2, audio_samples_limit - 28*2, 1, data + 0x12, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+			data[3] = encode(&(state->left), audio_samples + 28*3, audio_samples_limit - 28*3, 1, data + 0x13, 0, 4, XA_ADPCM_FILTER_COUNT, SHIFT_RANGE_8BPS);
+		}
 	}
 }
 
@@ -216,6 +222,14 @@ uint32_t psx_audio_xa_get_samples_per_sector(psx_audio_xa_settings_t settings) {
 
 uint32_t psx_audio_spu_get_samples_per_block(void) {
 	return 28;
+}
+
+uint32_t psx_audio_xa_get_sector_interleave(psx_audio_xa_settings_t settings) {
+	// 1/2 interleave for 37800 Hz 8-bit stereo at 1x speed
+	int interleave = settings.stereo ? 2 : 4;
+	if (settings.frequency == PSX_AUDIO_XA_FREQ_SINGLE) { interleave <<= 1; }
+	if (settings.bits_per_sample == 4) { interleave <<= 1; }
+	return interleave;
 }
 
 static void psx_audio_xa_encode_init_sector(uint8_t *buffer, psx_audio_xa_settings_t settings) {
@@ -284,13 +298,13 @@ int psx_audio_xa_encode_simple(psx_audio_xa_settings_t settings, int16_t* sample
 	return length;
 }
 
-int psx_audio_spu_encode(psx_audio_encoder_state_t *state, int16_t* samples, int sample_count, uint8_t *output) {
+int psx_audio_spu_encode(psx_audio_encoder_channel_state_t *state, int16_t* samples, int sample_count, int pitch, uint8_t *output) {
 	uint8_t prebuf[28];
 	uint8_t *buffer = output;
 	uint8_t *data;
 
 	for (int i = 0; i < sample_count; i += 28, buffer += 16) {
-		buffer[0] = encode_nibbles(&(state->left), samples + i, sample_count - i, 1, prebuf, 0, 1, SPU_ADPCM_FILTER_COUNT);
+		buffer[0] = encode(state, samples + i * pitch, sample_count - i, pitch, prebuf, 0, 1, SPU_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
 		buffer[1] = 0;
 
 		for (int j = 0; j < 28; j+=2) {
@@ -302,20 +316,22 @@ int psx_audio_spu_encode(psx_audio_encoder_state_t *state, int16_t* samples, int
 }
 
 int psx_audio_spu_encode_simple(int16_t* samples, int sample_count, uint8_t *output, int loop_start) {
-	psx_audio_encoder_state_t state;
-	memset(&state, 0, sizeof(psx_audio_encoder_state_t));
-	int length = psx_audio_spu_encode(&state, samples, sample_count, output);
+	psx_audio_encoder_channel_state_t state;
+	memset(&state, 0, sizeof(psx_audio_encoder_channel_state_t));
+	int length = psx_audio_spu_encode(&state, samples, sample_count, 1, output);
 
 	if (length >= 32) {
 		if (loop_start < 0) {
-			output[1] = 4;
-			output[length - 16 + 1] = 1;
+			//output[1] = PSX_AUDIO_SPU_LOOP_START;
+			output[length - 16 + 1] = PSX_AUDIO_SPU_LOOP_END;
 		} else {
-			psx_audio_spu_set_flag_at_sample(output, loop_start, 4);
-			output[length - 16 + 1] = 3;
+			psx_audio_spu_set_flag_at_sample(output, loop_start, PSX_AUDIO_SPU_LOOP_START);
+			output[length - 16 + 1] = PSX_AUDIO_SPU_LOOP_REPEAT;
 		}
 	} else if (length >= 16) {
-		output[1] = loop_start >= 0 ? 7 : 5;
+		output[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+		if (loop_start >= 0)
+			output[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
 	}
 
 	return length;
