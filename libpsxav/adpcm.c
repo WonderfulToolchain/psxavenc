@@ -283,7 +283,7 @@ int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_stat
 	return (((j + 17) / 18) * xa_sector_size);
 }
 
-int psx_audio_xa_encode_finalize(psx_audio_xa_settings_t settings, uint8_t *output, int output_length) {
+void psx_audio_xa_encode_finalize(psx_audio_xa_settings_t settings, uint8_t *output, int output_length) {
 	if (output_length >= 2336) {
 		output[output_length - 2352 + 0x12] |= 0x80;
 		output[output_length - 2352 + 0x18] |= 0x80;
@@ -301,7 +301,6 @@ int psx_audio_xa_encode_simple(psx_audio_xa_settings_t settings, int16_t* sample
 int psx_audio_spu_encode(psx_audio_encoder_channel_state_t *state, int16_t* samples, int sample_count, int pitch, uint8_t *output) {
 	uint8_t prebuf[28];
 	uint8_t *buffer = output;
-	uint8_t *data;
 
 	for (int i = 0; i < sample_count; i += 28, buffer += 16) {
 		buffer[0] = encode(state, samples + i * pitch, sample_count - i, pitch, prebuf, 0, 1, SPU_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);

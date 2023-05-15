@@ -1,5 +1,7 @@
 project('psxavenc', 'c', default_options: ['c_std=c11'])
 
+libm_dep = meson.get_compiler('c').find_library('m')
+
 ffmpeg = [
   dependency('libavformat'),
   dependency('libavcodec'),
@@ -21,4 +23,4 @@ executable('psxavenc', [
   'psxavenc/filefmt.c',
   'psxavenc/mdec.c',
   'psxavenc/psxavenc.c'
-], dependencies: [ffmpeg, libpsxav_dep], install: true)
+], dependencies: [libm_dep, ffmpeg, libpsxav_dep], install: true)

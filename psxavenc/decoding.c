@@ -24,8 +24,6 @@ freely, subject to the following restrictions:
 
 #include "common.h"
 
-static void poll_av_packet(settings_t *settings, AVPacket *packet);
-
 int decode_frame(AVCodecContext *codec, AVFrame *frame, int *frame_size, AVPacket *packet) {
 	int ret;
 
@@ -271,7 +269,7 @@ static void poll_av_packet_video(settings_t *settings, AVPacket *packet)
 	};
 
 	if (decode_frame(av->video_codec_context, av->frame, &frame_size, packet)) {
-		if (!av->frame->width || !av->frame->height || !av->frame->data) {
+		if (!av->frame->width || !av->frame->height || !av->frame->data[0]) {
 			return;
 		}
 
