@@ -1,5 +1,7 @@
 project('psxavenc', 'c', default_options: ['c_std=c11'])
 
+add_project_arguments('-D_POSIX_C_SOURCE=201112L', language : 'c')
+
 libm_dep = meson.get_compiler('c').find_library('m')
 
 ffmpeg = [
