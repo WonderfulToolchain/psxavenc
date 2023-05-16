@@ -69,7 +69,6 @@ typedef struct {
 } vid_encoder_state_t;
 
 typedef struct {
-	int video_frame_src_size;
 	int video_frame_dst_size;
 	int audio_stream_index;
 	int video_stream_index;

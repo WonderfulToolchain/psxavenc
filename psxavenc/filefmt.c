@@ -363,7 +363,7 @@ void encode_file_sbs(settings_t *settings, FILE *output) {
 	settings->state_vid.frame_max_size = settings->alignment;
 	settings->state_vid.quant_scale_sum = 0;
 
-	for (int j = 0; ensure_av_data(settings, 0, 1); j++) {
+	for (int j = 0; ensure_av_data(settings, 0, 2); j++) {
 		encode_frame_bs(settings->video_frames, settings);
 		fwrite(settings->state_vid.frame_output, settings->alignment, 1, output);
 
