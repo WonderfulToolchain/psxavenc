@@ -22,17 +22,21 @@ jobs:
       run: |
         psxavenc/.github/scripts/build.sh psxavenc-windows x86_64-w64-mingw32 psxavenc/.github/scripts/mingw-cross.txt
 
+    - name: Upload Windows build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: psxavenc-windows
+        path: psxavenc-windows.zip
+
     - name: Build psxavenc for Linux
       run: |
         psxavenc/.github/scripts/build.sh psxavenc-linux
 
-    - name: Upload build artifacts
+    - name: Upload Linux build artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: psxavenc-windows
-        path: |
-          psxavenc-windows.zip
-          psxavenc-linux.zip
+        name: psxavenc-linux
+        path: psxavenc-linux.zip
 
     - name: Publish release
       if:   ${{ github.ref_type == 'tag' }}
