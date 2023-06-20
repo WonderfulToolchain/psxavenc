@@ -1,0 +1,48 @@
+
+name: Build psxavenc
+on:   [ push, pull_request ]
+
+jobs:
+  build:
+    name:    Build and create release
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Install prerequisites
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends meson ninja-build gcc-mingw-w64-x86-64
+
+    - name: Fetch repo contents
+      uses: actions/checkout@v3
+      with:
+        path: psxavenc
+
+    - name: Build psxavenc for Windows
+      run: |
+        psxavenc/.github/scripts/build.sh psxavenc-windows x86_64-w64-mingw32 psxavenc/.github/scripts/mingw-cross.txt
+
+    - name: Upload Windows build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: psxavenc-windows
+        path: psxavenc-windows.zip
+
+    - name: Build psxavenc for Linux
+      run: |
+        psxavenc/.github/scripts/build.sh psxavenc-linux
+
+    - name: Upload Linux build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: psxavenc-linux
+        path: psxavenc-linux.zip
+
+    - name: Publish release
+      if:   ${{ github.ref_type == 'tag' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        #fail_on_unmatched_files: true
+        files: |
+          psxavenc-windows.zip
+          psxavenc-linux.zip
