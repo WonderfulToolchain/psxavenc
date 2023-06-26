@@ -257,6 +257,7 @@ void encode_file_xa(settings_t *settings, FILE *output) {
 void encode_file_str(settings_t *settings, FILE *output) {
 	psx_audio_xa_settings_t xa_settings = settings_to_libpsxav_xa_audio(settings);
 	psx_audio_encoder_state_t audio_state;
+	int sector_size = psx_audio_xa_get_buffer_size_per_sector(xa_settings);
 	int audio_samples_per_sector;
 	uint8_t buffer[2352];
 
@@ -341,7 +342,7 @@ void encode_file_str(settings_t *settings, FILE *output) {
 			}
 		}
 
-		fwrite(buffer, 2352, 1, output);
+		fwrite(buffer, sector_size, 1, output);
 
 		time_t t = get_elapsed_time(settings);
 		if (t) {
@@ -363,7 +364,7 @@ void encode_file_sbs(settings_t *settings, FILE *output) {
 	settings->state_vid.frame_max_size = settings->alignment;
 	settings->state_vid.quant_scale_sum = 0;
 
-	for (int j = 0; ensure_av_data(settings, 0, 2); j++) {
+	for (int j = 0; ensure_av_data(settings, 0, 1); j++) {
 		encode_frame_bs(settings->video_frames, settings);
 		fwrite(settings->state_vid.frame_output, settings->alignment, 1, output);
 
