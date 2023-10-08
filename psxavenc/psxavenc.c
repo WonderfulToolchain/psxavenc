@@ -38,15 +38,16 @@ void print_help(void) {
 		"    psxavenc -t <xa|xacd>     [-f 18900|37800] [-b 4|8] [-c 1|2] [-F 0-255] [-C 0-31] <in> <out.xa>\n"
 		"    psxavenc -t <str2|str2cd> [-f 18900|37800] [-b 4|8] [-c 1|2] [-F 0-255] [-C 0-31] [-s WxH] [-I] [-r num/den] [-x 1|2] <in> <out.str>\n"
 		"    psxavenc -t sbs2          [-s WxH] [-I] [-r num/den] [-a size] <in> <out.str>\n"
-		"    psxavenc -t <spu|vag>     [-f freq] [-L] <in> <out.vag>\n"
+		"    psxavenc -t <spu|vag>     [-f freq] [-L] [-a size] <in> <out.vag>\n"
 		"    psxavenc -t <spui|vagi>   [-f freq] [-c 1-24] [-L] [-i size] [-a size] <in> <out.vag>\n"
 		"\nTool options:\n"
 		"    -h               Show this help message and exit\n"
 		"    -q               Suppress all non-error messages\n"
-		"\nOutput options:\n"
-		"    -t format        Use specified output type:\n"
-		"                       xa     [A.] .xa, 2336-byte sectors\n"
-		"                       xacd   [A.] .xa, 2352-byte sectors\n"
+		"\n"
+		"Output options:\n"
+		"    -t format        Use specified output type\n"
+		"                       xa     [A.] XA-ADPCM, 2336-byte sectors\n"
+		"                       xacd   [A.] XA-ADPCM, 2352-byte sectors\n"
 		"                       spu    [A.] raw SPU-ADPCM mono data\n"
 		"                       spui   [A.] raw SPU-ADPCM interleaved data\n"
 		"                       vag    [A.] .vag SPU-ADPCM mono\n"
@@ -54,24 +55,48 @@ void print_help(void) {
 		"                       str2   [AV] v2 .str video, 2336-byte sectors\n"
 		"                       str2cd [AV] v2 .str video, 2352-byte sectors\n"
 		"                       sbs2   [.V] v2 .sbs video, 2048-byte sectors\n"
-		"    -F num           Set the XA file number for xa/str2 (0-255)\n"
-		"    -C num           Set the XA channel number for xa/str2 (0-31)\n"
-		"\nAudio options:\n"
-		"    -f freq          Use specified sample rate (must be 18900 or 37800 for xa/str2)\n"
-		"    -b bitdepth      Use specified bit depth for xa/str2 (4 or 8)\n"
-		"    -c channels      Use specified channel count (1-2 for xa/str2, any for spui/vagi)\n"
-		"    -L               Add a loop marker at the end of SPU-ADPCM data\n"
-		"    -R key=value,... Pass custom options to libswresample (see ffmpeg docs)\n"
-		"\nSPU interleaving options (spui/vagi format):\n"
-		"    -i size          Use specified interleave\n"
-		"    -a size          Pad header and each interleaved chunk to specified size\n"
-		"\nVideo options (str2/str2cd/sbs2 format):\n"
-		"    -s WxH           Rescale input file to fit within specified size (default 320x240)\n"
+		"    -F num           xa/str2: Set the XA file number\n"
+		"                       0-255, default 0\n"
+		"    -C num           xa/str2: Set the XA channel number\n"
+		"                       0-31, default 0\n"
+		"\n"
+		"Audio options:\n"
+		"    -f freq          Use specified sample rate\n"
+		"                       xa/str2:   18900 or 37800, default 37800\n"
+		"                       spu/vag:   any value, default 44100\n"
+		"                       spui/vagi: any value, default 44100\n"
+		"    -b bitdepth      Use specified bit depth\n"
+		"                       xa/str2:   4 or 8, default 4\n"
+		"                       spu/vag:   must be 4\n"
+		"                       spui/vagi: must be 4\n"
+		"    -c channels      Use specified channel count\n"
+		"                       xa/str2:   1 or 2, default 2\n"
+		"                       spu/vag:   must be 1\n"
+		"                       spui/vagi: any value, default 2\n"
+		"    -R key=value,... Pass custom options to libswresample (see FFmpeg docs)\n"
+		"\n"
+		"SPU-ADPCM options (spu/spui/vag/vagi formats):\n"
+		"    -L               spu/vag:   Add a loop marker at the end of sample data\n"
+		"                     spui/vagi: Add a loop marker at the end of each chunk\n"
+		"    -i size          spui/vagi: Use specified channel interleave\n"
+		"                       Any multiple of 16, default 2048\n"
+		"    -a size          spu/vag:   Pad sample data to multiple of specified size\n"
+		"                       Any value >= 16, default 64\n"
+		"                     spui/vagi: Pad header and each chunk to multiple of specified size\n"
+		"                       Any value >= 16, default 2048\n"
+		"\n"
+		"Video options:\n"
+		"    -s WxH           Rescale input file to fit within specified size\n"
+		"                       16x16-320x256 in 16-pixel increments, default 320x240\n"
 		"    -I               Force stretching to given size without preserving aspect ratio\n"
-		"    -S key=value,... Pass custom options to libswscale (see ffmpeg docs)\n"
-		"    -r num/den       Set frame rate to specified integer or fraction (default 15)\n"
-		"    -x speed         Set the CD-ROM speed the file is meant to played at (1-2)\n"
-		"    -a size          Set the size of each frame for sbs2\n"
+		"    -r num[/den]     Set frame rate to specified integer or fraction\n"
+		"                       1-30, default 15\n"
+		"    -x speed         str2: Set the CD-ROM speed the file is meant to played at\n"
+		"                       1 or 2, default 2\n"
+		"    -a size          sbs2: Set the size of each frame\n"
+		"                       Any value >= 256, default 8192\n"
+		"    -S key=value,... Pass custom options to libswscale (see FFmpeg docs)\n"
+		"\n"
 	);
 }
 
@@ -105,31 +130,35 @@ int parse_args(settings_t* settings, int argc, char** argv) {
 			case 'F': {
 				settings->file_number = strtol(optarg, NULL, 0);
 				if (settings->file_number < 0 || settings->file_number > 255) {
-					fprintf(stderr, "Invalid file number: %d\n", settings->file_number);
+					fprintf(stderr, "Invalid file number: %d (must be in 0-255 range)\n", settings->file_number);
 					return -1;
 				}
 			} break;
 			case 'C': {
 				settings->channel_number = strtol(optarg, NULL, 0);
 				if (settings->channel_number < 0 || settings->channel_number > 31) {
-					fprintf(stderr, "Invalid channel number: %d\n", settings->channel_number);
+					fprintf(stderr, "Invalid channel number: %d (must be in 0-31 range)\n", settings->channel_number);
 					return -1;
 				}
 			} break;
 			case 'f': {
 				settings->frequency = strtol(optarg, NULL, 0);
+				if (settings->frequency < 1000) {
+					fprintf(stderr, "Invalid frequency: %d (must be at least 1000)\n", settings->frequency);
+					return -1;
+				}
 			} break;
 			case 'b': {
 				settings->bits_per_sample = strtol(optarg, NULL, 0);
 				if (settings->bits_per_sample != 4 && settings->bits_per_sample != 8) {
-					fprintf(stderr, "Invalid bit depth: %d\n", settings->frequency);
+					fprintf(stderr, "Invalid bit depth: %d (must be 4 or 8)\n", settings->bits_per_sample);
 					return -1;
 				}
 			} break;
 			case 'c': {
 				settings->channels = strtol(optarg, NULL, 0);
-				if (settings->channels < 1 || settings->channels > 24) {
-					fprintf(stderr, "Invalid channel count: %d\n", settings->channels);
+				if (settings->channels < 1) {
+					fprintf(stderr, "Invalid channel count: %d (must be at least 1)\n", settings->channels);
 					return -1;
 				}
 			} break;
@@ -142,14 +171,14 @@ int parse_args(settings_t* settings, int argc, char** argv) {
 			case 'i': {
 				settings->interleave = (strtol(optarg, NULL, 0) + 15) & ~15;
 				if (settings->interleave < 16) {
-					fprintf(stderr, "Invalid interleave: %d\n", settings->interleave);
+					fprintf(stderr, "Invalid interleave: %d (must be at least 16)\n", settings->interleave);
 					return -1;
 				}
 			} break;
 			case 'a': {
 				settings->alignment = strtol(optarg, NULL, 0);
-				if (settings->alignment < 1) {
-					fprintf(stderr, "Invalid alignment: %d\n", settings->alignment);
+				if (settings->alignment < 16) {
+					fprintf(stderr, "Invalid alignment: %d (must be at least 16)\n", settings->alignment);
 					return -1;
 				}
 			} break;
@@ -162,11 +191,11 @@ int parse_args(settings_t* settings, int argc, char** argv) {
 				settings->video_height = (strtol(next + 1, NULL, 0) + 15) & ~15;
 
 				if (settings->video_width < 16 || settings->video_width > 320) {
-					fprintf(stderr, "Invalid video width: %d\n", settings->video_width);
+					fprintf(stderr, "Invalid video width: %d (must be in 16-320 range)\n", settings->video_width);
 					return -1;
 				}
-				if (settings->video_height < 16 || settings->video_height > 240) {
-					fprintf(stderr, "Invalid video height: %d\n", settings->video_height);
+				if (settings->video_height < 16 || settings->video_height > 256) {
+					fprintf(stderr, "Invalid video height: %d (must be in 16-256 range)\n", settings->video_height);
 					return -1;
 				}
 			} break;
@@ -190,35 +219,44 @@ int parse_args(settings_t* settings, int argc, char** argv) {
 				}
 				i = settings->video_fps_num / settings->video_fps_den;
 				if (i < 1 || i > 60) {
-					fprintf(stderr, "Invalid frame rate: %d/%d\n", settings->video_fps_num, settings->video_fps_den);
+					fprintf(stderr, "Invalid frame rate: %d/%d (must be in 1-60 range)\n", settings->video_fps_num, settings->video_fps_den);
 					return -1;
 				}
 			} break;
 			case 'x': {
 				settings->cd_speed = strtol(optarg, NULL, 0);
 				if (settings->cd_speed < 1 || settings->cd_speed > 2) {
-					fprintf(stderr, "Invalid CD-ROM speed: %d\n", settings->cd_speed);
+					fprintf(stderr, "Invalid CD-ROM speed: %d (must be 1 or 2)\n", settings->cd_speed);
 					return -1;
 				}
 			} break;
 		}
 	}
 
-	// Validate settings
+	// Some settings' (frequency, channels, interleave and alignment) default
+	// values are initialized here as they depend on the chosen format.
 	switch (settings->format) {
 		case FORMAT_XA:
 		case FORMAT_XACD:
 		case FORMAT_STR2:
 		case FORMAT_STR2CD:
-			if (settings->frequency != PSX_AUDIO_XA_FREQ_SINGLE && settings->frequency != PSX_AUDIO_XA_FREQ_DOUBLE) {
+			if (!settings->frequency) {
+				settings->frequency = PSX_AUDIO_XA_FREQ_DOUBLE;
+			} else if (settings->frequency != PSX_AUDIO_XA_FREQ_SINGLE && settings->frequency != PSX_AUDIO_XA_FREQ_DOUBLE) {
 				fprintf(
 					stderr, "Invalid XA-ADPCM frequency: %d Hz (must be %d or %d Hz)\n", settings->frequency,
 					PSX_AUDIO_XA_FREQ_SINGLE, PSX_AUDIO_XA_FREQ_DOUBLE
 				);
 				return -1;
 			}
-			if (settings->channels > 2) {
+			if (!settings->channels) {
+				settings->channels = 2;
+			} else if (settings->channels > 2) {
 				fprintf(stderr, "Invalid XA-ADPCM channel count: %d (must be 1 or 2)\n", settings->channels);
+				return -1;
+			}
+			if (settings->interleave || settings->alignment) {
+				fprintf(stderr, "Interleave and frame size cannot be specified for this format\n");
 				return -1;
 			}
 			if (settings->loop) {
@@ -228,36 +266,54 @@ int parse_args(settings_t* settings, int argc, char** argv) {
 			break;
 		case FORMAT_SPU:
 		case FORMAT_VAG:
+			if (!settings->frequency) {
+				settings->frequency = 44100;
+			}
 			if (settings->bits_per_sample != 4) {
 				fprintf(stderr, "Invalid SPU-ADPCM bit depth: %d (must be 4)\n", settings->bits_per_sample);
 				return -1;
 			}
-			if (settings->channels != 1) {
+			if (!settings->channels) {
+				settings->channels = 1;
+			} else if (settings->channels > 1) {
 				fprintf(stderr, "Invalid SPU-ADPCM channel count: %d (must be 1)\n", settings->channels);
 				return -1;
 			}
 			if (settings->interleave) {
-				fprintf(stderr, "Interleave cannot be specified for mono SPU-ADPCM\n");
+				fprintf(stderr, "Interleave cannot be specified for this format\n");
 				return -1;
+			}
+			if (!settings->alignment) {
+				settings->alignment = 64;
 			}
 			break;
 		case FORMAT_SPUI:
 		case FORMAT_VAGI:
+			if (!settings->frequency) {
+				settings->frequency = 44100;
+			}
 			if (settings->bits_per_sample != 4) {
 				fprintf(stderr, "Invalid SPU-ADPCM bit depth: %d (must be 4)\n", settings->bits_per_sample);
 				return -1;
 			}
+			if (!settings->channels) {
+				settings->channels = 2;
+			}
 			if (!settings->interleave) {
-				fprintf(stderr, "Interleave must be specified for interleaved SPU-ADPCM\n");
-				return -1;
+				settings->interleave = 2048;
+			}
+			if (!settings->alignment) {
+				settings->alignment = 2048;
 			}
 			break;
 		case FORMAT_SBS2:
-			if (!settings->alignment) {
-				fprintf(stderr, "Alignment (frame size) must be specified\n");
+			if (settings->interleave) {
+				fprintf(stderr, "Interleave cannot be specified for this format\n");
 				return -1;
 			}
-			if (settings->alignment < 256) {
+			if (!settings->alignment) {
+				settings->alignment = 8192;
+			} else if (settings->alignment < 256) {
 				fprintf(stderr, "Invalid frame size: %d (must be at least 256)\n", settings->alignment);
 				return -1;
 			}
@@ -284,11 +340,11 @@ int main(int argc, char **argv) {
 	settings.file_number = 0;
 	settings.channel_number = 0;
 	settings.cd_speed = 2;
-	settings.channels = 1;
-	settings.frequency = PSX_AUDIO_XA_FREQ_DOUBLE;
+	settings.channels = 0;
+	settings.frequency = 0;
 	settings.bits_per_sample = 4;
 	settings.interleave = 0;
-	settings.alignment = 2048;
+	settings.alignment = 0;
 	settings.loop = false;
 
 	// NOTE: ffmpeg/ffplay's .str demuxer has the frame rate hardcoded to 15fps

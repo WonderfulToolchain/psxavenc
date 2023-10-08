@@ -139,6 +139,15 @@ void encode_file_spu(settings_t *settings, FILE *output) {
 		}
 	}
 
+	int padding_size = (block_count*block_size) % settings->alignment;
+	if (padding_size) {
+		padding_size = settings->alignment - padding_size;
+		uint8_t *padding = malloc(padding_size);
+		memset(padding, 0, padding_size);
+		fwrite(padding, padding_size, 1, output);
+		free(padding);
+	}
+
 	if (settings->format == FORMAT_VAG) {
 		uint8_t header[48];
 		memset(header, 0, 48);
