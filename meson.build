@@ -1,6 +1,6 @@
 project('psxavenc', 'c', default_options: ['c_std=c11'])
 
-add_project_arguments('-D_POSIX_C_SOURCE=201112L', language : 'c')
+add_project_arguments('-D_POSIX_C_SOURCE=201112L', '-ffast-math', language : 'c')
 
 conf_data = configuration_data()
 conf_data.set('VERSION', '"' + run_command('git', '-C', meson.project_source_root(), 'describe', '--tags', '--always', '--dirty', '--match=v*', check: true).stdout().strip() + '"')

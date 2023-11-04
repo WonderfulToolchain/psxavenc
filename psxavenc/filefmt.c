@@ -299,6 +299,7 @@ void encode_file_str(settings_t *settings, FILE *output) {
 		fprintf(stderr, "Frame size: %.2f sectors\n", frame_size);
 	}
 
+	init_encoder_state(settings);
 	settings->state_vid.frame_output = malloc(2016 * (int)ceil(frame_size));
 	settings->state_vid.frame_index = 0;
 	settings->state_vid.frame_data_offset = 0;
@@ -362,9 +363,11 @@ void encode_file_str(settings_t *settings, FILE *output) {
 	}
 
 	free(settings->state_vid.frame_output);
+	destroy_encoder_state(settings);
 }
 
 void encode_file_sbs(settings_t *settings, FILE *output) {
+	init_encoder_state(settings);
 	settings->state_vid.frame_output = malloc(settings->alignment);
 	settings->state_vid.frame_data_offset = 0;
 	settings->state_vid.frame_max_size = settings->alignment;
@@ -385,4 +388,5 @@ void encode_file_sbs(settings_t *settings, FILE *output) {
 	}
 
 	free(settings->state_vid.frame_output);
+	destroy_encoder_state(settings);
 }

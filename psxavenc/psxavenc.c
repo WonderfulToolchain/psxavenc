@@ -374,6 +374,9 @@ int main(int argc, char **argv) {
 	settings.video_frames = NULL;
 	settings.video_frame_count = 0;
 
+	settings.state_vid.huffman_encoding_map = NULL;
+	settings.state_vid.coeff_clamp_map = NULL;
+	settings.state_vid.dct_context = NULL;
 	for(int i = 0; i < 6; i++) {
 		settings.state_vid.dct_block_lists[i] = NULL;
 	}

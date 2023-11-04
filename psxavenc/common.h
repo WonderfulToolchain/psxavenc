@@ -34,6 +34,7 @@ freely, subject to the following restrictions:
 
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/avdct.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
@@ -65,7 +66,11 @@ typedef struct {
 	int uncomp_hwords_used;
 	int quant_scale;
 	int quant_scale_sum;
-	float *dct_block_lists[6];
+
+	uint32_t *huffman_encoding_map;
+	int16_t *coeff_clamp_map;
+	int16_t *dct_block_lists[6];
+	AVDCT *dct_context;
 } vid_encoder_state_t;
 
 typedef struct {
@@ -142,5 +147,7 @@ void encode_file_str(settings_t *settings, FILE *output);
 void encode_file_sbs(settings_t *settings, FILE *output);
 
 // mdec.c
+bool init_encoder_state(settings_t *settings);
+void destroy_encoder_state(settings_t *settings);
 void encode_frame_bs(uint8_t *video_frame, settings_t *settings);
 void encode_sector_str(uint8_t *video_frames, uint8_t *output, settings_t *settings);
