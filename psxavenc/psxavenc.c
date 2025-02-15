@@ -189,7 +189,7 @@ int parse_args(settings_t* settings, int argc, char** argv) {
 					return -1;
 				}
 				i = settings->video_fps_num / settings->video_fps_den;
-				if (i < 1 || i > 30) {
+				if (i < 1 || i > 60) {
 					fprintf(stderr, "Invalid frame rate: %d/%d\n", settings->video_fps_num, settings->video_fps_den);
 					return -1;
 				}
