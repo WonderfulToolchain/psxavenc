@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ROOT_DIR="$(pwd)"
-FFMPEG_VERSION="6.0"
+FFMPEG_VERSION="7.1"
 NUM_JOBS="4"
 
 if [ $# -eq 1 ]; then
