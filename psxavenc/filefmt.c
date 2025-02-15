@@ -306,7 +306,7 @@ void encode_file_str(settings_t *settings, FILE *output) {
 
 		if ((j%interleave) < video_sectors_per_block) {
 			// Video sector
-			init_sector_buffer_video(buffer, settings);
+			init_sector_buffer_video((psx_cdrom_sector_mode2_t*) buffer, settings);
 			encode_sector_str(settings->video_frames, buffer, settings);
 		} else {
 			// Audio sector
@@ -342,7 +342,7 @@ void encode_file_str(settings_t *settings, FILE *output) {
 			}
 		}
 
-		fwrite(buffer, sector_size, 1, output);
+		fwrite(buffer + 2352 - sector_size, sector_size, 1, output);
 
 		time_t t = get_elapsed_time(settings);
 		if (t) {

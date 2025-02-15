@@ -614,13 +614,8 @@ void encode_sector_str(uint8_t *video_frames, uint8_t *output, settings_t *setti
 	header[0x00E] = (uint8_t)(settings->state_vid.bytes_used>>16);
 	header[0x00F] = (uint8_t)(settings->state_vid.bytes_used>>24);
 
-	if (settings->format == FORMAT_STR2CD) {
-		memcpy(output + 0x018, header, sizeof(header));
-		memcpy(output + 0x018 + 0x020, settings->state_vid.frame_output + settings->state_vid.frame_data_offset, 2016);
-	} else {
-		memcpy(output + 0x008, header, sizeof(header));
-		memcpy(output + 0x008 + 0x020, settings->state_vid.frame_output + settings->state_vid.frame_data_offset, 2016);
-	}
+	memcpy(output + 0x018, header, sizeof(header));
+	memcpy(output + 0x018 + 0x020, settings->state_vid.frame_output + settings->state_vid.frame_data_offset, 2016);
 
 	settings->state_vid.frame_data_offset += 2016;
 }
