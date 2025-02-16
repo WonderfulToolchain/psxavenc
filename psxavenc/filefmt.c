@@ -229,7 +229,7 @@ void encode_file_xa(settings_t *settings, FILE *output) {
 	psx_audio_xa_settings_t xa_settings = settings_to_libpsxav_xa_audio(settings);
 	psx_audio_encoder_state_t audio_state;	
 	int audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
-	uint8_t buffer[2352];
+	uint8_t buffer[PSX_CDROM_SECTOR_SIZE];
 
 	memset(&audio_state, 0, sizeof(psx_audio_encoder_state_t));
 
@@ -266,9 +266,17 @@ void encode_file_xa(settings_t *settings, FILE *output) {
 void encode_file_str(settings_t *settings, FILE *output) {
 	psx_audio_xa_settings_t xa_settings = settings_to_libpsxav_xa_audio(settings);
 	psx_audio_encoder_state_t audio_state;
-	int sector_size = psx_audio_xa_get_buffer_size_per_sector(xa_settings);
 	int audio_samples_per_sector;
-	uint8_t buffer[2352];
+	uint8_t buffer[PSX_CDROM_SECTOR_SIZE];
+
+	int offset, sector_size;
+	if (settings->format == FORMAT_STR2V) {
+		sector_size = 2048;
+		offset = 0x18;
+	} else {
+		sector_size = psx_audio_xa_get_buffer_size_per_sector(xa_settings);
+		offset = PSX_CDROM_SECTOR_SIZE - sector_size;
+	}
 
 	int interleave;
 	int video_sectors_per_block;
@@ -277,16 +285,16 @@ void encode_file_str(settings_t *settings, FILE *output) {
 		audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
 		interleave = psx_audio_xa_get_sector_interleave(xa_settings) * settings->cd_speed;
 		video_sectors_per_block = interleave - 1;
+
+		if (!settings->quiet) {
+			fprintf(stderr, "Interleave: %d/%d audio, %d/%d video\n",
+				interleave - video_sectors_per_block, interleave, video_sectors_per_block, interleave);
+		}
 	} else {
 		// 0/1 audio, 1/1 video
 		audio_samples_per_sector = 0;
 		interleave = 1;
 		video_sectors_per_block = 1;
-	}
-
-	if (!settings->quiet) {
-		fprintf(stderr, "Interleave: %d/%d audio, %d/%d video\n",
-			interleave - video_sectors_per_block, interleave, video_sectors_per_block, interleave);
 	}
 
 	memset(&audio_state, 0, sizeof(psx_audio_encoder_state_t));
@@ -349,7 +357,7 @@ void encode_file_str(settings_t *settings, FILE *output) {
 			calculate_edc_data(buffer);
 		}
 
-		fwrite(buffer + 2352 - sector_size, sector_size, 1, output);
+		fwrite(buffer + offset, sector_size, 1, output);
 
 		time_t t = get_elapsed_time(settings);
 		if (t) {

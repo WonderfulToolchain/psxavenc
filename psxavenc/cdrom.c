@@ -28,6 +28,8 @@ void init_sector_buffer_video(psx_cdrom_sector_mode2_t *buffer, settings_t *sett
 		memset(buffer, 0, PSX_CDROM_SECTOR_SIZE);
 		memset(buffer->sync + 1, 0xFF, 10);
 		buffer->header.mode = 0x02;
+	} else if (settings->format == FORMAT_STR2V) {
+		memset(buffer->data, 0, 2048);
 	} else {
 		memset(buffer->subheader, 0, PSX_CDROM_SECTOR_SIZE - 16);
 	}

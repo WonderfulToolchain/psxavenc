@@ -40,16 +40,19 @@ freely, subject to the following restrictions:
 #include <libswresample/swresample.h>
 #include <libpsxav.h>
 
-#define NUM_FORMATS 9
-#define FORMAT_XA 0
-#define FORMAT_XACD 1
-#define FORMAT_SPU 2
-#define FORMAT_SPUI 3
-#define FORMAT_VAG 4
-#define FORMAT_VAGI 5
-#define FORMAT_STR2 6
-#define FORMAT_STR2CD 7
-#define FORMAT_SBS2 8
+typedef enum {
+	FORMAT_XA,
+	FORMAT_XACD,
+	FORMAT_SPU,
+	FORMAT_SPUI,
+	FORMAT_VAG,
+	FORMAT_VAGI,
+	FORMAT_STR2,
+	FORMAT_STR2CD,
+	FORMAT_STR2V,
+	FORMAT_SBS2,
+	NUM_FORMATS
+} psxavenc_format_t;
 
 typedef struct {
 	int frame_index;

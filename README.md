@@ -57,6 +57,7 @@ $ psxavenc -t vagi -f 44100 -c 2 -L -i 8192 in.wav out.vag
 | `vagi`   | SPU-ADPCM        | Any      | None  | Any         |
 | `str2`   | None or XA-ADPCM | 1 or 2   | BS v2 | 2336 bytes  |
 | `str2cd` | None or XA-ADPCM | 1 or 2   | BS v2 | 2352 bytes  |
+| `str2v`  | None             |          | BS v2 |             |
 | `sbs2`   | None             |          | BS v2 | Any         |
 
 Notes:
