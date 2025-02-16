@@ -351,7 +351,14 @@ bool poll_av_data(settings_t *settings)
 
 bool ensure_av_data(settings_t *settings, int needed_audio_samples, int needed_video_frames)
 {
-	while (settings->audio_sample_count < needed_audio_samples || settings->video_frame_count < needed_video_frames) {
+	// HACK: in order to update settings->end_of_input as soon as all data has
+	// been read from the input file, this loop waits for more data than
+	// strictly needed.
+	//while (settings->audio_sample_count < needed_audio_samples || settings->video_frame_count < needed_video_frames) {
+	while (
+		(needed_audio_samples && settings->audio_sample_count <= needed_audio_samples) ||
+		(needed_video_frames && settings->video_frame_count <= needed_video_frames)
+	) {
 		//fprintf(stderr, "ensure %d -> %d, %d -> %d\n", settings->audio_sample_count, needed_audio_samples, settings->video_frame_count, needed_video_frames);
 		if (!poll_av_data(settings)) {
 			// Keep returning true even if the end of the input file has been
