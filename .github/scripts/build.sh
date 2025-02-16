@@ -67,6 +67,7 @@ rm -rf ffmpeg-build
 
 meson setup \
 	--buildtype release \
+	-Db_lto=true \
 	--strip \
 	--prefix $ROOT_DIR/psxavenc-dist \
 	--pkg-config-path $ROOT_DIR/ffmpeg-dist/lib/pkgconfig \
