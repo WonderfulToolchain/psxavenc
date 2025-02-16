@@ -2,6 +2,10 @@ project('psxavenc', 'c', default_options: ['c_std=c11'])
 
 add_project_arguments('-D_POSIX_C_SOURCE=201112L', language : 'c')
 
+conf_data = configuration_data()
+conf_data.set('VERSION', '"' + run_command('git', 'describe', '--tags', '--match=v*', check: true).stdout().strip() + '"')
+configure_file(output: 'config.h', configuration: conf_data)
+
 libm_dep = meson.get_compiler('c').find_library('m')
 
 ffmpeg = [

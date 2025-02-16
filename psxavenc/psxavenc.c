@@ -23,6 +23,7 @@ freely, subject to the following restrictions:
 */
 
 #include "common.h"
+#include "config.h"
 
 const char *format_names[NUM_FORMATS] = {
 	"xa", "xacd",
@@ -42,6 +43,7 @@ void print_help(void) {
 		"    psxavenc -t <spui|vagi>   [-f freq] [-c 1-24] [-L] [-i size] [-a size] <in> <out.vag>\n"
 		"\nTool options:\n"
 		"    -h               Show this help message and exit\n"
+		"    -V               Show version information and exit\n"
 		"    -q               Suppress all non-error messages\n"
 		"\n"
 		"Output options:\n"
@@ -100,14 +102,22 @@ void print_help(void) {
 	);
 }
 
+void print_version(void) {
+	printf("psxavenc " VERSION "\n");
+}
+
 int parse_args(settings_t* settings, int argc, char** argv) {
 	int c, i;
 	char *next;
-	while ((c = getopt(argc, argv, "?hqt:F:C:f:b:c:LR:i:a:s:IS:r:x:")) != -1) {
+	while ((c = getopt(argc, argv, "?hVqt:F:C:f:b:c:LR:i:a:s:IS:r:x:")) != -1) {
 		switch (c) {
 			case '?':
 			case 'h': {
 				print_help();
+				return -1;
+			} break;
+			case 'V': {
+				print_version();
 				return -1;
 			} break;
 			case 'q': {
