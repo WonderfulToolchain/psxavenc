@@ -23,23 +23,22 @@ freely, subject to the following restrictions:
 
 #include "common.h"
 
-void init_sector_buffer_video(uint8_t *buffer, settings_t *settings) {
-	int offset;
+void init_sector_buffer_video(psx_cdrom_sector_mode2_t *buffer, settings_t *settings) {
 	if (settings->format == FORMAT_STR2CD) {
-		memset(buffer, 0, 2352);
-		memset(buffer+0x001, 0xFF, 10);
-		buffer[0x00F] = 0x02;
-		offset = 0x10;
+		memset(buffer, 0, PSX_CDROM_SECTOR_SIZE);
+		memset(buffer->sync + 1, 0xFF, 10);
+		buffer->header.mode = 0x02;
 	} else {
-		memset(buffer, 0, 2336);
-		offset = 0;
+		memset(buffer->subheader, 0, PSX_CDROM_SECTOR_SIZE - 16);
 	}
 
-	buffer[offset+0] = settings->file_number;
-	buffer[offset+1] = settings->channel_number & 0x1F;
-	buffer[offset+2] = 0x08 | 0x40;
-	buffer[offset+3] = 0x00;
-	memcpy(buffer + offset + 4, buffer + offset, 4);
+	buffer->subheader[0].file = settings->file_number;
+	buffer->subheader[0].channel = settings->channel_number & PSX_CDROM_SECTOR_XA_CHANNEL_MASK;
+	buffer->subheader[0].submode =
+		PSX_CDROM_SECTOR_XA_SUBMODE_DATA
+		| PSX_CDROM_SECTOR_XA_SUBMODE_RT;
+	buffer->subheader[0].coding = 0;
+	memcpy(buffer->subheader + 1, buffer->subheader, sizeof(psx_cdrom_sector_xa_subheader_t));
 }
 
 void calculate_edc_data(uint8_t *buffer)

@@ -315,7 +315,7 @@ void encode_file_str(settings_t *settings, FILE *output) {
 
 		if ((j%interleave) < video_sectors_per_block) {
 			// Video sector
-			init_sector_buffer_video(buffer, settings);
+			init_sector_buffer_video((psx_cdrom_sector_mode2_t*) buffer, settings);
 			encode_sector_str(settings->video_frames, buffer, settings);
 		} else {
 			// Audio sector
@@ -342,16 +342,13 @@ void encode_file_str(settings_t *settings, FILE *output) {
 			buffer[0x00C] = ((t/75/60)%10)|(((t/75/60)/10)<<4);
 			buffer[0x00D] = (((t/75)%60)%10)|((((t/75)%60)/10)<<4);
 			buffer[0x00E] = ((t%75)%10)|(((t%75)/10)<<4);
-
-			// FIXME: EDC is not calculated in 2336-byte sector mode (shouldn't
-			// matter anyway, any CD image builder will have to recalculate it
-			// due to the sector's MSF changing)
-			if((j%interleave) < video_sectors_per_block) {
-				calculate_edc_data(buffer);
-			}
 		}
 
-		fwrite(buffer, sector_size, 1, output);
+		if((j%interleave) < video_sectors_per_block) {
+			calculate_edc_data(buffer);
+		}
+
+		fwrite(buffer + 2352 - sector_size, sector_size, 1, output);
 
 		time_t t = get_elapsed_time(settings);
 		if (t) {

@@ -124,7 +124,7 @@ typedef struct {
 } settings_t;
 
 // cdrom.c
-void init_sector_buffer_video(uint8_t *buffer, settings_t *settings);
+void init_sector_buffer_video(psx_cdrom_sector_mode2_t *buffer, settings_t *settings);
 void calculate_edc_data(uint8_t *buffer);
 
 // decoding.c

@@ -79,6 +79,58 @@ void psx_audio_spu_set_flag_at_sample(uint8_t* spu_data, int sample_pos, int fla
 
 #define PSX_CDROM_SECTOR_SIZE 2352
 
+typedef struct {
+	uint8_t minute;
+	uint8_t second;
+	uint8_t sector;
+	uint8_t mode;
+} psx_cdrom_sector_header_t;
+
+typedef struct {
+	uint8_t file;
+	uint8_t channel;
+	uint8_t submode;
+	uint8_t coding;
+} psx_cdrom_sector_xa_subheader_t;
+
+typedef struct {
+	uint8_t sync[12];
+	psx_cdrom_sector_header_t header;
+	uint8_t data[0x920];
+} psx_cdrom_sector_mode1_t;
+
+typedef struct {
+	uint8_t sync[12];
+	psx_cdrom_sector_header_t header;
+	psx_cdrom_sector_xa_subheader_t subheader[2];
+	uint8_t data[0x918];
+} psx_cdrom_sector_mode2_t;
+
+_Static_assert(sizeof(psx_cdrom_sector_mode1_t) == PSX_CDROM_SECTOR_SIZE, "Invalid Mode1 sector size");
+_Static_assert(sizeof(psx_cdrom_sector_mode2_t) == PSX_CDROM_SECTOR_SIZE, "Invalid Mode2 sector size");
+
+#define PSX_CDROM_SECTOR_XA_CHANNEL_MASK 0x1F
+
+#define PSX_CDROM_SECTOR_XA_SUBMODE_EOR     0x01
+#define PSX_CDROM_SECTOR_XA_SUBMODE_VIDEO   0x02
+#define PSX_CDROM_SECTOR_XA_SUBMODE_AUDIO   0x04
+#define PSX_CDROM_SECTOR_XA_SUBMODE_DATA    0x08
+#define PSX_CDROM_SECTOR_XA_SUBMODE_TRIGGER 0x10
+#define PSX_CDROM_SECTOR_XA_SUBMODE_FORM2   0x20
+#define PSX_CDROM_SECTOR_XA_SUBMODE_RT      0x40
+#define PSX_CDROM_SECTOR_XA_SUBMODE_EOF     0x80
+
+#define PSX_CDROM_SECTOR_XA_CODING_MONO         0x00
+#define PSX_CDROM_SECTOR_XA_CODING_STEREO       0x01
+#define PSX_CDROM_SECTOR_XA_CODING_CHANNEL_MASK 0x03
+#define PSX_CDROM_SECTOR_XA_CODING_FREQ_DOUBLE  0x00
+#define PSX_CDROM_SECTOR_XA_CODING_FREQ_SINGLE  0x04
+#define PSX_CDROM_SECTOR_XA_CODING_FREQ_MASK    0x0C
+#define PSX_CDROM_SECTOR_XA_CODING_BITS_4       0x00
+#define PSX_CDROM_SECTOR_XA_CODING_BITS_8       0x10
+#define PSX_CDROM_SECTOR_XA_CODING_BITS_MASK    0x30
+#define PSX_CDROM_SECTOR_XA_CODING_EMPHASIS     0x40
+
 typedef enum {
 	PSX_CDROM_SECTOR_TYPE_MODE1,
 	PSX_CDROM_SECTOR_TYPE_MODE2_FORM1,
