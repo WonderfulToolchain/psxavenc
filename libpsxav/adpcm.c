@@ -242,7 +242,7 @@ static void psx_audio_xa_encode_init_sector(psx_cdrom_sector_mode2_t *buffer, ps
 		memset(buffer->sync + 1, 0xFF, 10);
 		buffer->header.mode = 0x02;
 	} else {
-		memset(buffer->subheader, 0, PSX_CDROM_SECTOR_SIZE);
+		memset(buffer->subheader, 0, PSX_CDROM_SECTOR_SIZE - 16);
 	}
 
 	buffer->subheader[0].file = settings.file_number;
