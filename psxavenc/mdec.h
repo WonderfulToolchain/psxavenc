@@ -27,6 +27,7 @@ freely, subject to the following restrictions:
 #include <stdbool.h>
 #include <stdint.h>
 #include <libavcodec/avdct.h>
+#include "args.h"
 
 typedef struct {
 	int frame_index;
@@ -55,13 +56,14 @@ typedef struct {
 } mdec_encoder_state_t;
 
 typedef struct {
+	bs_codec_t video_codec;
 	int video_width;
 	int video_height;
 
 	mdec_encoder_state_t state;
 } mdec_encoder_t;
 
-bool init_mdec_encoder(mdec_encoder_t *encoder, int video_width, int video_height);
+bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int video_width, int video_height);
 void destroy_mdec_encoder(mdec_encoder_t *encoder);
 void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame);
-int encode_sector_str(mdec_encoder_t *encoder, uint8_t *video_frames, uint8_t *output);
+int encode_sector_str(mdec_encoder_t *encoder, format_t format, uint8_t *video_frames, uint8_t *output);

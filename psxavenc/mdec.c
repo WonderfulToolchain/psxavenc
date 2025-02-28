@@ -28,7 +28,15 @@ freely, subject to the following restrictions:
 #include <stdlib.h>
 #include <string.h>
 #include <libavcodec/avdct.h>
+#include "args.h"
 #include "mdec.h"
+
+// https://stackoverflow.com/a/60011209
+#if 0
+#define DIVIDE_ROUNDED(n, d) (((n) >= 0) ? (((n) + (d)/2) / (d)) : (((n) - (d)/2) / (d)))
+#else
+#define DIVIDE_ROUNDED(n, d) ((int)round((double)(n) / (double)(d)))
+#endif
 
 #define AC_PAIR(zeroes, value) \
 	(((zeroes) << 10) | ((+(value)) & 0x3FF)), \
@@ -154,6 +162,44 @@ static const struct {
 	{16, 0x001F, AC_PAIR(27,  1)}
 };
 
+static const struct {
+	int c_bits;
+	uint32_t c_value;
+	int sign_bits;
+	int value_bits;
+} dc_c_huffman_tree[] = {
+	{2, 0x0,  0, 0},
+	{2, 0x1,  1, 0},
+	{2, 0x2,  1, 1},
+	{3, 0x6,  1, 2},
+	{4, 0xE,  1, 3},
+	{5, 0x1E, 1, 4},
+	{6, 0x3E, 1, 5},
+	{7, 0x7E, 1, 6},
+	{8, 0xFE, 1, 7},
+};
+
+static const struct {
+	int c_bits;
+	uint32_t c_value;
+	int sign_bits;
+	int value_bits;
+} dc_y_huffman_tree[] = {
+	{3, 0x4,  0, 0},
+	{2, 0x0,  1, 0},
+	{2, 0x1,  1, 1},
+	{3, 0x5,  1, 2},
+	{3, 0x6,  1, 3},
+	{4, 0xE,  1, 4},
+	{5, 0x1E, 1, 5},
+	{6, 0x3E, 1, 6},
+	{7, 0x7E, 1, 7},
+};
+
+static const uint8_t dc_coeff_indices[6] = {
+	0, 1, 2, 2, 2, 2
+};
+
 static const uint8_t quant_dec[8*8] = {
 	 2, 16, 19, 22, 26, 27, 29, 34,
 	16, 16, 22, 24, 27, 29, 34, 37,
@@ -165,6 +211,7 @@ static const uint8_t quant_dec[8*8] = {
 	27, 29, 35, 38, 46, 56, 69, 83
 };
 
+#if 0
 static const uint8_t dct_zigzag_table[8*8] = {
 	 0,  1,  5,  6, 14, 15, 27, 28,
 	 2,  4,  7, 13, 16, 26, 29, 42,
@@ -175,6 +222,7 @@ static const uint8_t dct_zigzag_table[8*8] = {
 	21, 34, 37, 47, 50, 56, 59, 61,
 	35, 36, 48, 49, 57, 58, 62, 63
 };
+#endif
 
 static const uint8_t dct_zagzig_table[8*8] = {
 	 0,  1,  8, 16,  9,  2,  3, 10,
@@ -209,30 +257,83 @@ static const int16_t dct_scale_table[8*8] = {
 };
 #endif
 
-static void init_dct_data(mdec_encoder_state_t *state) {
+static void init_dct_data(mdec_encoder_state_t *state, bs_codec_t codec) {
 	for(int i = 0; i <= 0xFFFF; i++) {
 		// high 8 bits = bit count
 		// low 24 bits = value
-		state->ac_huffman_map[i] = ((6+16) << 24) | (0x01 << 16) | i;
+		state->ac_huffman_map[i] = ((6+16)<<24)|((0x01<<16)|(i));
 
 		int16_t coeff = (int16_t)i;
-
 		if (coeff < -0x200)
 			coeff = -0x200;
-		else if (coeff > +0x1FF)
-			coeff = +0x1FF;
+		else if (coeff > +0x1FE)
+			coeff = +0x1FE; // 0x1FF = v2 end of frame
 
-		state->coeff_clamp_map[i] = coeff & 0x3FF;
+		state->coeff_clamp_map[i] = coeff;
+
+		int16_t delta = (int16_t)DIVIDE_ROUNDED(i, 4);
+		if (delta < -0xFF)
+			delta = -0xFF;
+		else if (delta > +0xFF)
+			delta = +0xFF;
+
+		// Some versions of Sony's BS v3 decoder compute each DC coefficient as
+		// ((last + delta * 4) & 0x3FF) instead of just (last + delta * 4). The
+		// encoder can leverage this behavior to represent large coefficient
+		// differences as smaller deltas that cause the decoder to overflow and
+		// wrap around (e.g. -1 to encode -512 -> 511 as opposed to +1023). This
+		// saves some space as larger DC values take up more bits.
+		if (codec == BS_CODEC_V3DC) {
+			if (delta > +0x80)
+				delta -= 0x100;
+		}
+
+		state->delta_clamp_map[i] = delta;
 	}
 
-	int tree_item_count = sizeof(ac_huffman_tree) / sizeof(ac_huffman_tree[0]);
+	int ac_tree_item_count = sizeof(ac_huffman_tree) / sizeof(ac_huffman_tree[0]);
+	int dc_c_tree_item_count = sizeof(dc_c_huffman_tree) / sizeof(dc_c_huffman_tree[0]);
+	int dc_y_tree_item_count = sizeof(dc_y_huffman_tree) / sizeof(dc_y_huffman_tree[0]);
 
-	for(int i = 0; i < tree_item_count; i++) {
+	for (int i = 0; i < ac_tree_item_count; i++) {
 		int bits = ac_huffman_tree[i].c_bits+1;
 		uint32_t base_value = ac_huffman_tree[i].c_value;
 
 		state->ac_huffman_map[ac_huffman_tree[i].u_hword_pos] = (bits << 24) | (base_value << 1) | 0;
 		state->ac_huffman_map[ac_huffman_tree[i].u_hword_neg] = (bits << 24) | (base_value << 1) | 1;
+	}
+	for (int i = 0; i < dc_c_tree_item_count; i++) {
+		int dc_bits = dc_c_huffman_tree[i].sign_bits + dc_c_huffman_tree[i].value_bits;
+		int bits = dc_c_huffman_tree[i].c_bits + dc_bits;
+		uint32_t base_value = dc_c_huffman_tree[i].c_value << dc_bits;
+
+		for (int j = 0; j < (1 << dc_bits); j++) {
+			int delta = j;
+
+			if ((j >> dc_c_huffman_tree[i].value_bits) == 0) {
+				delta -= (1 << dc_bits) - 1;
+				delta &= 0x1FF;
+			}
+
+			state->dc_huffman_map[(0 << 9) | delta] = (bits << 24) | base_value | j;
+			state->dc_huffman_map[(1 << 9) | delta] = (bits << 24) | base_value | j;
+		}
+	}
+	for (int i = 0; i < dc_y_tree_item_count; i++) {
+		int dc_bits = dc_y_huffman_tree[i].sign_bits + dc_y_huffman_tree[i].value_bits;
+		int bits = dc_y_huffman_tree[i].c_bits + dc_bits;
+		uint32_t base_value = dc_y_huffman_tree[i].c_value << dc_bits;
+
+		for (int j = 0; j < (1 << dc_bits); j++) {
+			int delta = j;
+
+			if ((j >> dc_y_huffman_tree[i].value_bits) == 0) {
+				delta -= (1 << dc_bits) - 1;
+				delta &= 0x1FF;
+			}
+
+			state->dc_huffman_map[(2 << 9) | delta] = (bits << 24) | base_value | j;
+		}
 	}
 }
 
@@ -302,29 +403,6 @@ static bool encode_bits(mdec_encoder_state_t *state, int bits, uint32_t val) {
 	return true;
 }
 
-static bool encode_ac_value(mdec_encoder_state_t *state, uint16_t value) {
-	assert(0 <= value && value <= 0xFFFF);
-
-#if 0
-	int tree_item_count = sizeof(ac_huffman_tree) / sizeof(ac_huffman_tree[0]);
-
-	for (int i = 0; i < tree_item_count; i++) {
-		if (value == ac_huffman_tree[i].u_hword_pos) {
-			return encode_bits(state, ac_huffman_tree[i].c_bits+1, ((uint32_t)ac_huffman_tree[i].c_value << 1) | 0);
-		} else if (value == ac_huffman_tree[i].u_hword_neg) {
-			return encode_bits(state, ac_huffman_tree[i].c_bits+1, ((uint32_t)ac_huffman_tree[i].c_value << 1) | 1);
-		}
-	}
-
-	// Use an escape
-	return encode_bits(state, 6+16, (0x01 << 16) | (0xFFFF & (uint32_t)value));
-#else
-	uint32_t outword = state->ac_huffman_map[value];
-
-	return encode_bits(state, outword >> 24, outword & 0xFFFFFF);
-#endif
-}
-
 #if 0
 static void transform_dct_block(int16_t *block) {
 	// Apply DCT to block
@@ -372,49 +450,67 @@ static int reduce_dct_block(mdec_encoder_state_t *state, int32_t *block, int32_t
 }
 #endif
 
-// https://stackoverflow.com/a/60011209
-#if 0
-#define DIVIDE_ROUNDED(n, d) (((n) >= 0) ? (((n) + (d)/2) / (d)) : (((n) - (d)/2) / (d)))
-#else
-#define DIVIDE_ROUNDED(n, d) ((int)round((double)(n) / (double)(d)))
-#endif
-
-static bool encode_dct_block(mdec_encoder_state_t *state, const int16_t *block, const int16_t *quant_table) {
+static bool encode_dct_block(
+	mdec_encoder_state_t *state,
+	bs_codec_t codec,
+	const int16_t *block,
+	const int16_t *quant_table
+) {
 	int dc = DIVIDE_ROUNDED(block[0], quant_table[0]);
-	dc = state->coeff_clamp_map[dc&0xFFFF];
 
-	if (!encode_bits(state, 10, dc))
-		return false;
+	dc = state->coeff_clamp_map[dc & 0xFFFF];
+
+	if (codec == BS_CODEC_V2) {
+		if (!encode_bits(state, 10, dc & 0x3FF))
+			return false;
+	} else {
+		int index = dc_coeff_indices[state->block_type];
+		int last = state->last_dc_values[index];
+
+		int delta = state->delta_clamp_map[(dc - last) & 0xFFFF];
+		state->last_dc_values[index] = (last + delta * 4) & 0x3FF;
+
+		uint32_t outword = state->dc_huffman_map[(index << 9) | (delta & 0x1FF)];
+
+		if (!encode_bits(state, outword >> 24, outword & 0xFFFFFF))
+			return false;
+	}
 
 	for (int i = 1, zeroes = 0; i < 64; i++) {
 		int ri = dct_zagzig_table[i];
 		int ac = DIVIDE_ROUNDED(block[ri], quant_table[ri]);
-		ac = state->coeff_clamp_map[ac&0xFFFF];
+
+		ac = state->coeff_clamp_map[ac & 0xFFFF];
 
 		if (ac == 0) {
 			zeroes++;
 		} else {
-			if (!encode_ac_value(state, (zeroes<<10)|ac))
+			uint32_t outword = state->ac_huffman_map[(zeroes << 10) | ac];
+
+			if (!encode_bits(state, outword >> 24, outword & 0xFFFFFF))
 				return false;
 
 			zeroes = 0;
-			state->uncomp_hwords_used += 1;
+			state->uncomp_hwords_used++;
 		}
 	}
-
-	//fprintf(stderr, "dc %08X rles %2d\n", dc, zero_rle_words);
-	//assert(dc >= -0x200); assert(dc <  +0x200);
 
 	// Store end of block
 	if (!encode_bits(state, 2, 0x2))
 		return false;
 
+	state->block_type++;
+	state->block_type %= 6;
 	state->uncomp_hwords_used += 2;
 	//state->uncomp_hwords_used = (state->uncomp_hwords_used+0xF)&~0xF;
 	return true;
 }
 
-bool init_mdec_encoder(mdec_encoder_t *encoder, int video_width, int video_height) {
+bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int video_width, int video_height) {
+	encoder->video_codec = video_codec;
+	encoder->video_width = video_width;
+	encoder->video_height = video_height;
+
 	mdec_encoder_state_t *state = &(encoder->state);
 
 	if (state->dct_context != NULL)
@@ -422,9 +518,9 @@ bool init_mdec_encoder(mdec_encoder_t *encoder, int video_width, int video_heigh
 
 	state->dct_context = avcodec_dct_alloc();
 	state->ac_huffman_map = malloc(0x10000 * sizeof(uint32_t));
-	state->dc_huffman_map = NULL;
+	state->dc_huffman_map = malloc(0x600 * sizeof(uint32_t));
 	state->coeff_clamp_map = malloc(0x10000 * sizeof(int16_t));
-	state->delta_clamp_map = NULL;
+	state->delta_clamp_map = malloc(0x10000 * sizeof(int16_t));
 
 	if (
 		state->dct_context == NULL ||
@@ -445,7 +541,7 @@ bool init_mdec_encoder(mdec_encoder_t *encoder, int video_width, int video_heigh
 	}
 
 	avcodec_dct_init(state->dct_context);
-	init_dct_data(state);
+	init_dct_data(state, video_codec);
 	return true;
 }
 
@@ -545,6 +641,19 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 		}
 	}
 
+	uint32_t end_of_block;
+
+	if (encoder->video_codec == BS_CODEC_V2) {
+		end_of_block = 0x1FF;
+	} else {
+		end_of_block = 0x3FF;
+		assert(state->dc_huffman_map);
+		assert(state->delta_clamp_map);
+	}
+
+	assert(state->ac_huffman_map);
+	assert(state->coeff_clamp_map);
+
 	// Attempt encoding the frame at the maximum quality. If the result is too
 	// large, increase the quantization scale and try again.
 	// TODO: if a frame encoded at scale N is too large but the same frame
@@ -565,6 +674,11 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 			quant_table[i] = quant_dec[i] * state->quant_scale;
 
 		memset(state->frame_output, 0, state->frame_max_size);
+
+		state->block_type = 0;
+		state->last_dc_values[0] = 0;
+		state->last_dc_values[1] = 0;
+		state->last_dc_values[2] = 0;
 
 		state->bits_value = 0;
 		state->bits_left = 16;
@@ -587,16 +701,18 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 				};
 
 				for(int i = 0; ok && (i < 6); i++)
-					ok = encode_dct_block(state, blocks[i], quant_table);
+					ok = encode_dct_block(state, encoder->video_codec, blocks[i], quant_table);
 			}
 		}
 
 		if (!ok)
 			continue;
-		if (!encode_bits(state, 10, 0x1FF))
+		if (!encode_bits(state, 10, end_of_block))
 			continue;
+#if 0
 		if (!encode_bits(state, 2, 0x2))
 			continue;
+#endif
 		if (!flush_bits(state))
 			continue;
 
@@ -630,11 +746,15 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 	state->frame_output[0x005] = (uint8_t)(state->quant_scale>>8);
 
 	// BS version
-	state->frame_output[0x006] = 0x02;
+	if (encoder->video_codec == BS_CODEC_V2)
+		state->frame_output[0x006] = 0x02;
+	else
+		state->frame_output[0x006] = 0x03;
+
 	state->frame_output[0x007] = 0x00;
 }
 
-int encode_sector_str(mdec_encoder_t *encoder, uint8_t *video_frames, uint8_t *output) {
+int encode_sector_str(mdec_encoder_t *encoder, format_t format, uint8_t *video_frames, uint8_t *output) {
 	mdec_encoder_state_t *state = &(encoder->state);
 	int last_frame_index = state->frame_index;
 	int frame_size = encoder->video_width * encoder->video_height * 2;
@@ -677,34 +797,32 @@ int encode_sector_str(mdec_encoder_t *encoder, uint8_t *video_frames, uint8_t *o
 	header[0x00A] = (uint8_t)(state->frame_index >> 16);
 	header[0x00B] = (uint8_t)(state->frame_index >> 24);
 
-	// Video frame size
-	header[0x010] = (uint8_t)encoder->video_width;
-	header[0x011] = (uint8_t)(encoder->video_width >> 8);
-	header[0x012] = (uint8_t)encoder->video_height;
-	header[0x013] = (uint8_t)(encoder->video_height >> 8);
-
-	// MDEC command (size of decompressed MDEC data)
-	header[0x014] = (uint8_t)state->blocks_used;
-	header[0x015] = (uint8_t)(state->blocks_used >> 8);
-	header[0x016] = 0x00;
-	header[0x017] = 0x38;
-
-	// Quantization scale
-	header[0x018] = (uint8_t)state->quant_scale;
-	header[0x019] = (uint8_t)(state->quant_scale >> 8);
-
-	// BS version
-	header[0x01A] = 0x02;
-	header[0x01B] = 0x00;
-
 	// Demuxed bytes used as a multiple of 4
 	header[0x00C] = (uint8_t)state->bytes_used;
 	header[0x00D] = (uint8_t)(state->bytes_used >> 8);
 	header[0x00E] = (uint8_t)(state->bytes_used >> 16);
 	header[0x00F] = (uint8_t)(state->bytes_used >> 24);
 
-	memcpy(output + 0x018, header, sizeof(header));
-	memcpy(output + 0x018 + 0x020, state->frame_output + state->frame_data_offset, 2016);
+	// Video frame size
+	header[0x010] = (uint8_t)encoder->video_width;
+	header[0x011] = (uint8_t)(encoder->video_width >> 8);
+	header[0x012] = (uint8_t)encoder->video_height;
+	header[0x013] = (uint8_t)(encoder->video_height >> 8);
+
+	// Copy of BS header
+	memcpy(header + 0x014, state->frame_output, 8);
+
+	int offset;
+
+	if (format == FORMAT_STR)
+		offset = 0x008;
+	else if (format == FORMAT_STRCD)
+		offset = 0x018;
+	else
+		offset = 0x000;
+
+	memcpy(output + offset, header, sizeof(header));
+	memcpy(output + offset + 0x020, state->frame_output + state->frame_data_offset, 2016);
 
 	state->frame_data_offset += 2016;
 	return state->frame_index - last_frame_index;

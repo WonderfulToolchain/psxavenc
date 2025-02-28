@@ -375,7 +375,7 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 	memset(&audio_state, 0, sizeof(psx_audio_encoder_state_t));
 
 	mdec_encoder_t encoder;
-	init_mdec_encoder(&encoder, args->video_width, args->video_height);
+	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
 
 	// e.g. 15fps = (150*7/8/15) = 8.75 blocks per frame
 	encoder.state.frame_block_base_overflow = (75 * args->str_cd_speed) * video_sectors_per_block * args->str_fps_den;
@@ -403,7 +403,7 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 			// Video sector
 			init_sector_buffer_video(args, (psx_cdrom_sector_mode2_t*) buffer, j);
 
-			int frames_used = encode_sector_str(&encoder, decoder->video_frames, buffer);
+			int frames_used = encode_sector_str(&encoder, args->format, decoder->video_frames, buffer);
 			retire_av_data(decoder, 0, frames_used);
 		} else {
 			// Audio sector
@@ -463,7 +463,7 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 
 void encode_file_sbs(args_t *args, decoder_t *decoder, FILE *output) {
 	mdec_encoder_t encoder;
-	init_mdec_encoder(&encoder, args->video_width, args->video_height);
+	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
 
 	encoder.state.frame_output = malloc(args->alignment);
 	encoder.state.frame_data_offset = 0;
