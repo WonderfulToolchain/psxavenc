@@ -21,8 +21,7 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 */
 
-#ifndef __LIBPSXAV_H__
-#define __LIBPSXAV_H__
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -106,6 +105,11 @@ typedef struct {
 	uint8_t data[0x918];
 } psx_cdrom_sector_mode2_t;
 
+typedef union {
+	psx_cdrom_sector_mode1_t mode1;
+	psx_cdrom_sector_mode2_t mode2;
+} psx_cdrom_sector_t;
+
 _Static_assert(sizeof(psx_cdrom_sector_mode1_t) == PSX_CDROM_SECTOR_SIZE, "Invalid Mode1 sector size");
 _Static_assert(sizeof(psx_cdrom_sector_mode2_t) == PSX_CDROM_SECTOR_SIZE, "Invalid Mode2 sector size");
 
@@ -137,6 +141,5 @@ typedef enum {
 	PSX_CDROM_SECTOR_TYPE_MODE2_FORM2
 } psx_cdrom_sector_type_t;
 
-void psx_cdrom_calculate_checksums(uint8_t *sector, psx_cdrom_sector_type_t type);
-
-#endif /* __LIBPSXAV_H__ */
+void psx_cdrom_init_sector(psx_cdrom_sector_t *sector, int lba, psx_cdrom_sector_type_t type);
+void psx_cdrom_calculate_checksums(psx_cdrom_sector_t *sector, psx_cdrom_sector_type_t type);

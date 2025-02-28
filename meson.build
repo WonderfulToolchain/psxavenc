@@ -25,9 +25,8 @@ libpsxav_dep = declare_dependency(include_directories: include_directories('libp
 
 executable('psxavenc', [
 	'psxavenc/args.c',
-	'psxavenc/cdrom.c',
 	'psxavenc/decoding.c',
 	'psxavenc/filefmt.c',
-	'psxavenc/mdec.c',
-	'psxavenc/psxavenc.c'
+	'psxavenc/main.c',
+	'psxavenc/mdec.c'
 ], dependencies: [libm_dep, ffmpeg, libpsxav_dep], install: true)

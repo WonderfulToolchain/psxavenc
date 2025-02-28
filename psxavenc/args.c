@@ -27,6 +27,7 @@ freely, subject to the following restrictions:
 #include <stdlib.h>
 #include <string.h>
 #include "args.h"
+#include "config.h"
 
 #define INVALID_PARAM -1
 
@@ -146,13 +147,6 @@ static const char *const format_names[NUM_FORMATS] = {
 };
 
 static void init_default_args(args_t *args) {
-	args->flags = 0;
-
-	args->input_file = NULL;
-	args->output_file = NULL;
-	args->swresample_options = NULL;
-	args->swscale_options = NULL;
-
 	if (
 		args->format == FORMAT_XA || args->format == FORMAT_XACD ||
 		args->format == FORMAT_STR || args->format == FORMAT_STRCD
@@ -692,6 +686,10 @@ bool parse_args(args_t *args, const char *const *options, int count) {
 
 	if (args->flags & FLAG_PRINT_HELP) {
 		print_help(args->format);
+		return false;
+	}
+	if (args->flags & FLAG_PRINT_VERSION) {
+		printf("psxavenc " VERSION "\n");
 		return false;
 	}
 	if (args->format == FORMAT_INVALID || args->input_file == NULL || args->output_file == NULL) {

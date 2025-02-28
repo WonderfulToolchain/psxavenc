@@ -266,7 +266,7 @@ int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_stat
 	uint8_t init_sector = 1;
 
 	if (settings.stereo) { sample_count <<= 1; }
-	
+
 	for (i = 0, j = 0; i < sample_count || ((j % 18) != 0); i += sample_jump, j++) {
 		psx_cdrom_sector_mode2_t *sector_data = (psx_cdrom_sector_mode2_t*) (output + ((j/18) * xa_sector_size) - xa_offset);
 		uint8_t *block_data = sector_data->data + ((j%18) * 0x80);
@@ -282,7 +282,7 @@ int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_stat
 		memcpy(block_data + 12, block_data + 8, 4);
 
 		if ((j+1)%18 == 0) {
-			psx_cdrom_calculate_checksums((uint8_t*) sector_data, PSX_CDROM_SECTOR_TYPE_MODE2_FORM2);
+			psx_cdrom_calculate_checksums((psx_cdrom_sector_t *)sector_data, PSX_CDROM_SECTOR_TYPE_MODE2_FORM2);
 			init_sector = 1;
 		}
 	}
