@@ -24,6 +24,7 @@ libpsxav = static_library('psxav', [
 libpsxav_dep = declare_dependency(include_directories: include_directories('libpsxav'), link_with: libpsxav)
 
 executable('psxavenc', [
+	'psxavenc/args.c',
 	'psxavenc/cdrom.c',
 	'psxavenc/decoding.c',
 	'psxavenc/filefmt.c',

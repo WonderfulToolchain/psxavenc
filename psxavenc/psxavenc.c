@@ -108,7 +108,7 @@ void print_version(void) {
 	printf("psxavenc " VERSION "\n");
 }
 
-int parse_args(settings_t* settings, int argc, char** argv) {
+int parse_args_old(settings_t* settings, int argc, char** argv) {
 	int c, i;
 	char *next;
 	while ((c = getopt(argc, argv, "?hVqt:F:C:f:b:c:LR:i:a:s:IS:r:x:")) != -1) {
@@ -389,7 +389,7 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	arg_offset = parse_args(&settings, argc, argv);
+	arg_offset = parse_args_old(&settings, argc, argv);
 	if (arg_offset < 0) {
 		return 1;
 	} else if (argc < arg_offset + 2) {
