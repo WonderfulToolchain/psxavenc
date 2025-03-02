@@ -51,7 +51,6 @@ typedef struct {
 	uint32_t *ac_huffman_map;
 	uint32_t *dc_huffman_map;
 	int16_t *coeff_clamp_map;
-	int16_t *delta_clamp_map;
 	int16_t *dct_block_lists[6];
 } mdec_encoder_state_t;
 
@@ -66,4 +65,10 @@ typedef struct {
 bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int video_width, int video_height);
 void destroy_mdec_encoder(mdec_encoder_t *encoder);
 void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame);
-int encode_sector_str(mdec_encoder_t *encoder, format_t format, uint8_t *video_frames, uint8_t *output);
+int encode_sector_str(
+	mdec_encoder_t *encoder,
+	format_t format,
+	uint16_t str_video_id,
+	uint8_t *video_frames,
+	uint8_t *output
+);

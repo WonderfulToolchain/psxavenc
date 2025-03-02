@@ -123,9 +123,9 @@ static const char *const general_options_help =
 	"                        spui:   [A.] raw SPU-ADPCM interleaved data\n"
 	"                        vag:    [A.] .vag SPU-ADPCM mono\n"
 	"                        vagi:   [A.] .vag SPU-ADPCM interleaved\n"
-	"                        str:    [AV] .str video, 2336-byte sectors\n"
-	"                        strcd:  [AV] .str video, 2352-byte sectors\n"
-	"                        strspu: [AV] .str video, 2048-byte sectors\n"
+	"                        str:    [AV] .str video + XA-ADPCM, 2336-byte sectors\n"
+	"                        strcd:  [AV] .str video + XA-ADPCM, 2352-byte sectors\n"
+	"                        strspu: [AV] .str video + SPU-ADPCM, 2048-byte sectors\n"
 	"                        strv:   [.V] .str video, 2048-byte sectors\n"
 	"                        sbs:    [.V] .sbs video\n"
 	"    -R key=value,...  Pass custom options to libswresample (see FFmpeg docs)\n"
@@ -148,12 +148,15 @@ static const char *const format_names[NUM_FORMATS] = {
 
 static void init_default_args(args_t *args) {
 	if (
-		args->format == FORMAT_XA || args->format == FORMAT_XACD ||
-		args->format == FORMAT_STR || args->format == FORMAT_STRCD
+		args->format == FORMAT_XA ||
+		args->format == FORMAT_XACD ||
+		args->format == FORMAT_STR ||
+		args->format == FORMAT_STRCD
 	)
 		args->audio_frequency = 37800;
 	else
 		args->audio_frequency = 44100;
+
 	if (args->format == FORMAT_SPU || args->format == FORMAT_VAG)
 		args->audio_channels = 1;
 	else
@@ -172,11 +175,13 @@ static void init_default_args(args_t *args) {
 	args->str_fps_num = 15;
 	args->str_fps_den = 1;
 	args->str_cd_speed = 2;
+	args->str_video_id = 0x8001;
+	args->str_audio_id = 0x0001;
 
 	if (args->format == FORMAT_SPU || args->format == FORMAT_VAG)
-		args->alignment = 64;
+		args->alignment = 64; // Default SPU DMA chunk size
 	else if (args->format == FORMAT_SBS)
-		args->alignment = 8192;
+		args->alignment = 8192; // Default for System 573 games
 	else
 		args->alignment = 2048;
 }
@@ -264,7 +269,7 @@ static int parse_xa_option(args_t *args, char option, const char *param) {
 }
 
 static const char *const spu_options_help =
-	"SPU-ADPCM options:\n"
+	"Mono SPU-ADPCM options:\n"
 	"    [-f freq] [-a size] [-l ms | -L] [-D]\n"
 	"\n"
 	"    -f freq           Use specified sample rate (default 44100)\n"
@@ -411,11 +416,13 @@ static int parse_bs_option(args_t *args, char option, const char *param) {
 
 static const char *const str_options_help =
 	".str container options:\n"
-	"    [-r num[/den]] [-x 1|2] [-A]\n"
+	"    [-r num[/den]] [-x 1|2] [-T id] [-A id] [-X]\n"
 	"\n"
 	"    -r num[/den]      Set video frame rate to specified integer or fraction (default 15)\n"
 	"    -x 1|2            Set CD-ROM speed the file is meant to played at (default 2)\n"
-	"    -A                Place audio sectors after corresponding video sectors\n"
+	"    -T id             Tag video sectors with specified .str type ID (default 0x8001)\n"
+	"    -A id             Tag SPU-ADPCM sectors with specified .str type ID (default 0x0001)\n"
+	"    -X                Place audio sectors after corresponding video sectors\n"
 	"                      (rather than ahead of them)\n"
 	"\n";
 
@@ -453,7 +460,13 @@ static int parse_str_option(args_t *args, char option, const char *param) {
 		case 'x':
 			return parse_int_one_of(&(args->str_cd_speed), "CD-ROM speed", param, 1, 2);
 
+		case 'T':
+			return parse_int(&(args->str_video_id), "video track type ID", param, 0x0000, 0xFFFF);
+
 		case 'A':
+			return parse_int(&(args->str_audio_id), "audio track type ID", param, 0x0000, 0xFFFF);
+
+		case 'X':
 			args->flags |= FLAG_STR_TRAILING_AUDIO;
 			return 1;
 

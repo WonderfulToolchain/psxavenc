@@ -87,6 +87,8 @@ typedef struct {
 	int str_fps_num;
 	int str_fps_den;
 	int str_cd_speed; // 1 or 2
+	int str_video_id;
+	int str_audio_id;
 	int alignment;
 } args_t;
 

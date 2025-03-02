@@ -120,7 +120,6 @@ int main(int argc, const char **argv) {
 
 		case FORMAT_STR:
 		case FORMAT_STRCD:
-		case FORMAT_STRV:
 			if (!(args.flags & FLAG_QUIET)) {
 				if (decoder.state.audio_stream)
 					fprintf(
@@ -147,6 +146,7 @@ int main(int argc, const char **argv) {
 			break;
 
 		case FORMAT_STRSPU:
+		case FORMAT_STRV:
 			if (!(args.flags & FLAG_QUIET)) {
 				if (decoder.state.audio_stream)
 					fprintf(

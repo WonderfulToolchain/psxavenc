@@ -32,13 +32,6 @@ freely, subject to the following restrictions:
 #include "args.h"
 #include "mdec.h"
 
-// https://stackoverflow.com/a/60011209
-#if 0
-#define DIVIDE_ROUNDED(n, d) (((n) >= 0) ? (((n) + (d)/2) / (d)) : (((n) - (d)/2) / (d)))
-#else
-#define DIVIDE_ROUNDED(n, d) ((int)round((double)(n) / (double)(d)))
-#endif
-
 #define AC_PAIR(zeroes, value) \
 	(((zeroes) << 10) | ((+(value)) & 0x3FF)), \
 	(((zeroes) << 10) | ((-(value)) & 0x3FF))
@@ -166,39 +159,31 @@ static const struct {
 static const struct {
 	int c_bits;
 	uint32_t c_value;
-	int sign_bits;
-	int value_bits;
+	int dc_bits;
 } dc_c_huffman_tree[] = {
-	{2, 0x0,  0, 0},
-	{2, 0x1,  1, 0},
-	{2, 0x2,  1, 1},
-	{3, 0x6,  1, 2},
-	{4, 0xE,  1, 3},
-	{5, 0x1E, 1, 4},
-	{6, 0x3E, 1, 5},
-	{7, 0x7E, 1, 6},
-	{8, 0xFE, 1, 7},
+	{2, 0x1,  0},
+	{2, 0x2,  1},
+	{3, 0x6,  2},
+	{4, 0xE,  3},
+	{5, 0x1E, 4},
+	{6, 0x3E, 5},
+	{7, 0x7E, 6},
+	{8, 0xFE, 7}
 };
 
 static const struct {
 	int c_bits;
 	uint32_t c_value;
-	int sign_bits;
-	int value_bits;
+	int dc_bits;
 } dc_y_huffman_tree[] = {
-	{3, 0x4,  0, 0},
-	{2, 0x0,  1, 0},
-	{2, 0x1,  1, 1},
-	{3, 0x5,  1, 2},
-	{3, 0x6,  1, 3},
-	{4, 0xE,  1, 4},
-	{5, 0x1E, 1, 5},
-	{6, 0x3E, 1, 6},
-	{7, 0x7E, 1, 7},
-};
-
-static const uint8_t dc_coeff_indices[6] = {
-	0, 1, 2, 2, 2, 2
+	{2, 0x0,  0},
+	{2, 0x1,  1},
+	{3, 0x5,  2},
+	{3, 0x6,  3},
+	{4, 0xE,  4},
+	{5, 0x1E, 5},
+	{6, 0x3E, 6},
+	{7, 0x7E, 7}
 };
 
 static const uint8_t quant_dec[8*8] = {
@@ -260,82 +245,75 @@ static const int16_t dct_scale_table[8*8] = {
 };
 #endif
 
+enum {
+	INDEX_CR,
+	INDEX_CB,
+	INDEX_Y
+};
+
+#define HUFFMAN_CODE(bits, value) (((bits) << 24) | (value))
+
 static void init_dct_data(mdec_encoder_state_t *state, bs_codec_t codec) {
 	for(int i = 0; i <= 0xFFFF; i++) {
-		// high 8 bits = bit count
-		// low 24 bits = value
-		state->ac_huffman_map[i] = ((6+16)<<24)|((0x01<<16)|(i));
+		state->ac_huffman_map[i] = HUFFMAN_CODE(6 + 16, (0x1 << 16) | i);
 
 		int16_t coeff = (int16_t)i;
+
 		if (coeff < -0x200)
 			coeff = -0x200;
 		else if (coeff > +0x1FE)
 			coeff = +0x1FE; // 0x1FF = v2 end of frame
 
 		state->coeff_clamp_map[i] = coeff;
-
-		int16_t delta = (int16_t)DIVIDE_ROUNDED(i, 4);
-		if (delta < -0xFF)
-			delta = -0xFF;
-		else if (delta > +0xFF)
-			delta = +0xFF;
-
-		// Some versions of Sony's BS v3 decoder compute each DC coefficient as
-		// ((last + delta * 4) & 0x3FF) instead of just (last + delta * 4). The
-		// encoder can leverage this behavior to represent large coefficient
-		// differences as smaller deltas that cause the decoder to overflow and
-		// wrap around (e.g. -1 to encode -512 -> 511 as opposed to +1023). This
-		// saves some space as larger DC values take up more bits.
-		if (codec == BS_CODEC_V3DC) {
-			if (delta > +0x80)
-				delta -= 0x100;
-		}
-
-		state->delta_clamp_map[i] = delta;
 	}
+
+	state->dc_huffman_map[(INDEX_CR << 9) | 0] = HUFFMAN_CODE(2, 0x0);
+	state->dc_huffman_map[(INDEX_CB << 9) | 0] = HUFFMAN_CODE(2, 0x0);
+	state->dc_huffman_map[(INDEX_Y  << 9) | 0] = HUFFMAN_CODE(3, 0x4);
 
 	int ac_tree_item_count = sizeof(ac_huffman_tree) / sizeof(ac_huffman_tree[0]);
 	int dc_c_tree_item_count = sizeof(dc_c_huffman_tree) / sizeof(dc_c_huffman_tree[0]);
 	int dc_y_tree_item_count = sizeof(dc_y_huffman_tree) / sizeof(dc_y_huffman_tree[0]);
 
 	for (int i = 0; i < ac_tree_item_count; i++) {
-		int bits = ac_huffman_tree[i].c_bits+1;
+		int bits = ac_huffman_tree[i].c_bits + 1;
 		uint32_t base_value = ac_huffman_tree[i].c_value;
 
-		state->ac_huffman_map[ac_huffman_tree[i].u_hword_pos] = (bits << 24) | (base_value << 1) | 0;
-		state->ac_huffman_map[ac_huffman_tree[i].u_hword_neg] = (bits << 24) | (base_value << 1) | 1;
+		state->ac_huffman_map[ac_huffman_tree[i].u_hword_pos] = HUFFMAN_CODE(bits, (base_value << 1) | 0);
+		state->ac_huffman_map[ac_huffman_tree[i].u_hword_neg] = HUFFMAN_CODE(bits, (base_value << 1) | 1);
 	}
 	for (int i = 0; i < dc_c_tree_item_count; i++) {
-		int dc_bits = dc_c_huffman_tree[i].sign_bits + dc_c_huffman_tree[i].value_bits;
-		int bits = dc_c_huffman_tree[i].c_bits + dc_bits;
-		uint32_t base_value = dc_c_huffman_tree[i].c_value << dc_bits;
+		int dc_bits = dc_c_huffman_tree[i].dc_bits;
+		int bits = dc_c_huffman_tree[i].c_bits + 1 + dc_bits;
+		uint32_t base_value = dc_c_huffman_tree[i].c_value;
+
+		int pos_offset = 1 << dc_bits;
+		int neg_offset = 1 - (1 << (dc_bits + 1));
 
 		for (int j = 0; j < (1 << dc_bits); j++) {
-			int delta = j;
+			int pos = (j + pos_offset) & 0x1FF;
+			int neg = (j + neg_offset) & 0x1FF;
 
-			if ((j >> dc_c_huffman_tree[i].value_bits) == 0) {
-				delta -= (1 << dc_bits) - 1;
-				delta &= 0x1FF;
-			}
-
-			state->dc_huffman_map[(0 << 9) | delta] = (bits << 24) | base_value | j;
-			state->dc_huffman_map[(1 << 9) | delta] = (bits << 24) | base_value | j;
+			state->dc_huffman_map[(INDEX_CR << 9) | pos] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (1 << dc_bits) | j);
+			state->dc_huffman_map[(INDEX_CR << 9) | neg] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (0 << dc_bits) | j);
+			state->dc_huffman_map[(INDEX_CB << 9) | pos] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (1 << dc_bits) | j);
+			state->dc_huffman_map[(INDEX_CB << 9) | neg] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (0 << dc_bits) | j);
 		}
 	}
 	for (int i = 0; i < dc_y_tree_item_count; i++) {
-		int dc_bits = dc_y_huffman_tree[i].sign_bits + dc_y_huffman_tree[i].value_bits;
-		int bits = dc_y_huffman_tree[i].c_bits + dc_bits;
-		uint32_t base_value = dc_y_huffman_tree[i].c_value << dc_bits;
+		int dc_bits = dc_y_huffman_tree[i].dc_bits;
+		int bits = dc_y_huffman_tree[i].c_bits + 1 + dc_bits;
+		uint32_t base_value = dc_y_huffman_tree[i].c_value;
+
+		int pos_offset = 1 << dc_bits;
+		int neg_offset = 1 - (1 << (dc_bits + 1));
 
 		for (int j = 0; j < (1 << dc_bits); j++) {
-			int delta = j;
+			int pos = (j + pos_offset) & 0x1FF;
+			int neg = (j + neg_offset) & 0x1FF;
 
-			if ((j >> dc_y_huffman_tree[i].value_bits) == 0) {
-				delta -= (1 << dc_bits) - 1;
-				delta &= 0x1FF;
-			}
-
-			state->dc_huffman_map[(2 << 9) | delta] = (bits << 24) | base_value | j;
+			state->dc_huffman_map[(INDEX_Y << 9) | pos] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (1 << dc_bits) | j);
+			state->dc_huffman_map[(INDEX_Y << 9) | neg] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (0 << dc_bits) | j);
 		}
 	}
 }
@@ -453,6 +431,13 @@ static int reduce_dct_block(mdec_encoder_state_t *state, int32_t *block, int32_t
 }
 #endif
 
+// https://stackoverflow.com/a/60011209
+#if 0
+#define DIVIDE_ROUNDED(n, d) (((n) >= 0) ? (((n) + (d)/2) / (d)) : (((n) - (d)/2) / (d)))
+#else
+#define DIVIDE_ROUNDED(n, d) ((int)round((double)(n) / (double)(d)))
+#endif
+
 static bool encode_dct_block(
 	mdec_encoder_state_t *state,
 	bs_codec_t codec,
@@ -467,11 +452,26 @@ static bool encode_dct_block(
 		if (!encode_bits(state, 10, dc & 0x3FF))
 			return false;
 	} else {
-		int index = dc_coeff_indices[state->block_type];
-		int last = state->last_dc_values[index];
+		int index = state->block_type;
 
-		int delta = state->delta_clamp_map[(dc - last) & 0xFFFF];
-		state->last_dc_values[index] = (last + delta * 4) & 0x3FF;
+		if (index > INDEX_Y)
+			index = INDEX_Y;
+
+		int delta = DIVIDE_ROUNDED(dc - state->last_dc_values[index], 4);
+		state->last_dc_values[index] += delta * 4;
+
+		// Some versions of Sony's BS v3 decoder compute each DC coefficient as
+		// ((last + delta * 4) & 0x3FF) instead of just (last + delta * 4). The
+		// encoder can leverage this behavior to represent large coefficient
+		// differences as smaller deltas that cause the decoder to overflow and
+		// wrap around (e.g. -1 to encode -512 -> 511 as opposed to +1023). This
+		// saves some space as larger DC values take up more bits.
+		if (codec == BS_CODEC_V3DC) {
+			if (delta < -0x80)
+				delta += 0x100;
+			else if (delta > +0x80)
+				delta -= 0x100;
+		}
 
 		uint32_t outword = state->dc_huffman_map[(index << 9) | (delta & 0x1FF)];
 
@@ -488,7 +488,7 @@ static bool encode_dct_block(
 		if (ac == 0) {
 			zeroes++;
 		} else {
-			uint32_t outword = state->ac_huffman_map[(zeroes << 10) | ac];
+			uint32_t outword = state->ac_huffman_map[(zeroes << 10) | (ac & 0x3FF)];
 
 			if (!encode_bits(state, outword >> 24, outword & 0xFFFFFF))
 				return false;
@@ -516,21 +516,21 @@ bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int vide
 
 	mdec_encoder_state_t *state = &(encoder->state);
 
+#if 0
 	if (state->dct_context != NULL)
 		return true;
+#endif
 
 	state->dct_context = avcodec_dct_alloc();
 	state->ac_huffman_map = malloc(0x10000 * sizeof(uint32_t));
-	state->dc_huffman_map = malloc(0x600 * sizeof(uint32_t));
+	state->dc_huffman_map = malloc(0x200 * 3 * sizeof(uint32_t));
 	state->coeff_clamp_map = malloc(0x10000 * sizeof(int16_t));
-	state->delta_clamp_map = malloc(0x10000 * sizeof(int16_t));
 
 	if (
 		state->dct_context == NULL ||
 		state->ac_huffman_map == NULL ||
 		state->dc_huffman_map == NULL ||
-		state->coeff_clamp_map == NULL ||
-		state->delta_clamp_map == NULL
+		state->coeff_clamp_map == NULL
 	)
 		return false;
 
@@ -569,12 +569,8 @@ void destroy_mdec_encoder(mdec_encoder_t *encoder) {
 		free(state->coeff_clamp_map);
 		state->coeff_clamp_map = NULL;
 	}
-	if (state->delta_clamp_map) {
-		free(state->delta_clamp_map);
-		state->delta_clamp_map = NULL;
-	}
 	for (int i = 0; i < 6; i++) {
-		if (state->dct_block_lists[i]) {
+		if (state->dct_block_lists[i] != NULL) {
 			free(state->dct_block_lists[i]);
 			state->dct_block_lists[i] = NULL;
 		}
@@ -653,7 +649,6 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 	} else {
 		end_of_block = 0x3FF;
 		assert(state->dc_huffman_map);
-		assert(state->delta_clamp_map);
 	}
 
 	assert(state->ac_huffman_map);
@@ -681,9 +676,9 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 		memset(state->frame_output, 0, state->frame_max_size);
 
 		state->block_type = 0;
-		state->last_dc_values[0] = 0;
-		state->last_dc_values[1] = 0;
-		state->last_dc_values[2] = 0;
+		state->last_dc_values[INDEX_CR] = 0;
+		state->last_dc_values[INDEX_CB] = 0;
+		state->last_dc_values[INDEX_Y] = 0;
 
 		state->bits_value = 0;
 		state->bits_left = 16;
@@ -759,7 +754,13 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 	state->frame_output[0x007] = 0x00;
 }
 
-int encode_sector_str(mdec_encoder_t *encoder, format_t format, uint8_t *video_frames, uint8_t *output) {
+int encode_sector_str(
+	mdec_encoder_t *encoder,
+	format_t format,
+	uint16_t str_video_id,
+	uint8_t *video_frames,
+	uint8_t *output
+) {
 	mdec_encoder_state_t *state = &(encoder->state);
 	int last_frame_index = state->frame_index;
 	int frame_size = encoder->video_width * encoder->video_height * 2;
@@ -784,9 +785,9 @@ int encode_sector_str(mdec_encoder_t *encoder, format_t format, uint8_t *video_f
 	header[0x000] = 0x60;
 	header[0x001] = 0x01;
 
-	// Chunk type: MDEC data
-	header[0x002] = 0x01;
-	header[0x003] = 0x80;
+	// Chunk type
+	header[0x002] = (uint8_t)str_video_id;
+	header[0x003] = (uint8_t)(str_video_id >> 8);
 
 	// Muxed chunk index/count
 	int chunk_index = state->frame_data_offset / 2016;
