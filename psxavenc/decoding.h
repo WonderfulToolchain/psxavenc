@@ -67,8 +67,8 @@ typedef struct {
 } decoder_t;
 
 enum {
-	DECODER_USE_AUDIO = 1 << 0,
-	DECODER_USE_VIDEO = 1 << 1,
+	DECODER_USE_AUDIO      = 1 << 0,
+	DECODER_USE_VIDEO      = 1 << 1,
 	DECODER_AUDIO_REQUIRED = 1 << 2,
 	DECODER_VIDEO_REQUIRED = 1 << 3
 };

@@ -136,7 +136,10 @@ static void write_vag_header(const args_t *args, int size_per_channel, uint8_t *
 	strncpy((char*)(header + 0x20), &args->output_file[name_offset], 16);
 }
 
-void encode_file_xa(args_t *args, decoder_t *decoder, FILE *output) {
+// The functions below are some peak spaghetti code I would rewrite if that
+// didn't also require scrapping the rest of the codebase. -- spicyjpeg
+
+void encode_file_xa(const args_t *args, decoder_t *decoder, FILE *output) {
 	psx_audio_xa_settings_t xa_settings = args_to_libpsxav_xa_audio(args);
 
 	int audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
@@ -187,26 +190,37 @@ void encode_file_xa(args_t *args, decoder_t *decoder, FILE *output) {
 	}
 }
 
-void encode_file_spu(args_t *args, decoder_t *decoder, FILE *output) {
+void encode_file_spu(const args_t *args, decoder_t *decoder, FILE *output) {
 	psx_audio_encoder_channel_state_t audio_state;
 	memset(&audio_state, 0, sizeof(psx_audio_encoder_channel_state_t));
-
-	int audio_samples_per_block = psx_audio_spu_get_samples_per_block();
-	int block_size = psx_audio_spu_get_buffer_size_per_block();
-	int block_count;
 
 	// The header must be written after the data as we don't yet know the
 	// number of audio samples.
 	if (args->format == FORMAT_VAG)
 		fseek(output, VAG_HEADER_SIZE, SEEK_SET);
 
-	for (block_count = 0; ensure_av_data(decoder, audio_samples_per_block, 0); block_count++) {
+	uint8_t buffer[PSX_AUDIO_SPU_BLOCK_SIZE];
+	int block_count = 0;
+
+	if (!(args->flags & FLAG_SPU_NO_LEADING_DUMMY)) {
+		// Insert leading silent block
+		memset(buffer, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+
+		fwrite(buffer, PSX_AUDIO_SPU_BLOCK_SIZE, 1, output);
+		block_count++;
+	}
+
+	int loop_start_block = -1;
+
+	if (args->audio_loop_point >= 0)
+		loop_start_block = (args->audio_loop_point * args->audio_frequency) / (PSX_AUDIO_SPU_SAMPLES_PER_BLOCK * 1000);
+
+	for (; ensure_av_data(decoder, PSX_AUDIO_SPU_SAMPLES_PER_BLOCK, 0); block_count++) {
 		int samples_length = decoder->audio_sample_count;
 
-		if (samples_length > audio_samples_per_block)
-			samples_length = audio_samples_per_block;
+		if (samples_length > PSX_AUDIO_SPU_SAMPLES_PER_BLOCK)
+			samples_length = PSX_AUDIO_SPU_SAMPLES_PER_BLOCK;
 
-		uint8_t buffer[16];
 		int length = psx_audio_spu_encode(
 			&audio_state,
 			decoder->audio_samples,
@@ -215,15 +229,10 @@ void encode_file_spu(args_t *args, decoder_t *decoder, FILE *output) {
 			buffer
 		);
 
-		// TODO: implement proper loop flag support
-		if (false)
+		if (block_count == loop_start_block)
 			buffer[1] |= PSX_AUDIO_SPU_LOOP_START;
-		if (decoder->end_of_input) {
-			if (args->flags & FLAG_SPU_LOOP_END)
-				buffer[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
-			else
-			 	buffer[1] |= PSX_AUDIO_SPU_LOOP_END;
-		}
+		if ((args->flags & FLAG_SPU_LOOP_END) && decoder->end_of_input)
+			buffer[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
 
 		retire_av_data(decoder, samples_length, 0);
 		fwrite(buffer, length, 1, output);
@@ -235,12 +244,21 @@ void encode_file_spu(args_t *args, decoder_t *decoder, FILE *output) {
 				stderr,
 				"\rBlock: %6d | Encoding speed: %5.2fx",
 				block_count,
-				(double)(block_count * audio_samples_per_block) / (double)(args->audio_frequency * t)
+				(double)(block_count * PSX_AUDIO_SPU_SAMPLES_PER_BLOCK) / (double)(args->audio_frequency * t)
 			);
 		}
 	}
 
-	int overflow = (block_count * block_size) % args->alignment;
+	if (!(args->flags & FLAG_SPU_LOOP_END)) {
+		// Insert trailing looping block
+		memset(buffer, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+		buffer[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+
+		fwrite(buffer, PSX_AUDIO_SPU_BLOCK_SIZE, 1, output);
+		block_count++;
+	}
+
+	int overflow = (block_count * PSX_AUDIO_SPU_BLOCK_SIZE) % args->alignment;
 
 	if (overflow) {
 		for (int i = 0; i < (args->alignment - overflow); i++)
@@ -248,15 +266,15 @@ void encode_file_spu(args_t *args, decoder_t *decoder, FILE *output) {
 	}
 	if (args->format == FORMAT_VAG) {
 		uint8_t header[VAG_HEADER_SIZE];
-		write_vag_header(args, block_count * block_size, header);
+		write_vag_header(args, block_count * PSX_AUDIO_SPU_BLOCK_SIZE, header);
 
 		fseek(output, 0, SEEK_SET);
 		fwrite(header, VAG_HEADER_SIZE, 1, output);
 	}
 }
 
-void encode_file_spui(args_t *args, decoder_t *decoder, FILE *output) {
-	int audio_state_size = sizeof(psx_audio_encoder_channel_state_t) * args->audio_channels;
+void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output) {
+	int audio_samples_per_chunk = args->audio_interleave / PSX_AUDIO_SPU_BLOCK_SIZE * PSX_AUDIO_SPU_SAMPLES_PER_BLOCK;
 
 	// NOTE: since the interleaved .vag format is not standardized, some tools
 	// (such as vgmstream) will not properly play files with interleave < 2048,
@@ -267,38 +285,52 @@ void encode_file_spui(args_t *args, decoder_t *decoder, FILE *output) {
 	int header_size = VAG_HEADER_SIZE + args->alignment - 1;
 	header_size -= header_size % args->alignment;
 
-	int audio_samples_per_block = psx_audio_spu_get_samples_per_block();
-	int block_size = psx_audio_spu_get_buffer_size_per_block();
-	int audio_samples_per_chunk = args->audio_interleave / block_size * audio_samples_per_block;
-	int chunk_count;
-
 	if (args->format == FORMAT_VAGI)
 		fseek(output, header_size, SEEK_SET);
 
+	int audio_state_size = sizeof(psx_audio_encoder_channel_state_t) * args->audio_channels;
 	psx_audio_encoder_channel_state_t *audio_state = malloc(audio_state_size);
-	uint8_t *buffer = malloc(buffer_size);
 	memset(audio_state, 0, audio_state_size);
 
-	for (chunk_count = 0; ensure_av_data(decoder, audio_samples_per_chunk * args->audio_channels, 0); chunk_count++) {
+	uint8_t *buffer = malloc(buffer_size);
+	int chunk_count = 0;
+
+	for (; ensure_av_data(decoder, audio_samples_per_chunk * args->audio_channels, 0); chunk_count++) {
 		int samples_length = decoder->audio_sample_count / args->audio_channels;
-		if (samples_length > audio_samples_per_chunk) samples_length = audio_samples_per_chunk;
+		int buffer_offset = 0;
+
+		if (samples_length > audio_samples_per_chunk)
+			samples_length = audio_samples_per_chunk;
+
+		// Insert leading silent block
+		if (chunk_count == 0 && !(args->flags & FLAG_SPU_NO_LEADING_DUMMY)) {
+			buffer_offset = PSX_AUDIO_SPU_BLOCK_SIZE;
+			samples_length -= PSX_AUDIO_SPU_BLOCK_SIZE;
+		}
 
 		for (int ch = 0; ch < args->audio_channels; ch++) {
 			memset(buffer, 0, buffer_size);
+
 			int length = psx_audio_spu_encode(
 				audio_state + ch,
 				decoder->audio_samples + ch,
 				samples_length,
 				args->audio_channels,
-				buffer
+				buffer + buffer_offset
 			);
 
-			if (length) {
-				// TODO: implement proper loop flag support
-				if (args->flags & FLAG_SPU_LOOP_END)
-					buffer[length - block_size + 1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
-				else if (decoder->end_of_input)
-					buffer[length - block_size + 1] |= PSX_AUDIO_SPU_LOOP_END;
+			if (length > 0) {
+				uint8_t *last_block = buffer + length - PSX_AUDIO_SPU_BLOCK_SIZE;
+
+				if (args->flags & FLAG_SPU_LOOP_END) {
+					last_block[1] = PSX_AUDIO_SPU_LOOP_REPEAT;
+				} else if (decoder->end_of_input) {
+					// HACK: the trailing block should in theory be appended to
+					// the existing data, but it's easier to just zerofill and
+					// repurpose the last encoded block
+					memset(last_block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+					last_block[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+				}
 			}
 
 			fwrite(buffer, buffer_size, 1, output);
@@ -332,10 +364,9 @@ void encode_file_spui(args_t *args, decoder_t *decoder, FILE *output) {
 	free(buffer);
 }
 
-void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
+void encode_file_str(const args_t *args, decoder_t *decoder, FILE *output) {
 	psx_audio_xa_settings_t xa_settings = args_to_libpsxav_xa_audio(args);
 	int audio_samples_per_sector;
-	uint8_t buffer[PSX_CDROM_SECTOR_SIZE];
 
 	int offset, sector_size;
 
@@ -349,7 +380,8 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 
 	int interleave;
 	int video_sectors_per_block;
-	if (decoder->state.audio_stream) {
+
+	if (decoder->state.audio_stream != NULL) {
 		// 1/N audio, (N-1)/N video
 		audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
 		interleave = psx_audio_xa_get_sector_interleave(xa_settings) * args->str_cd_speed;
@@ -399,16 +431,24 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 	for (int j = 0; !decoder->end_of_input || encoder.state.frame_data_offset < encoder.state.frame_max_size; j++) {
 		ensure_av_data(decoder, audio_samples_per_sector * args->audio_channels, frames_needed);
 
-		if ((j%interleave) < video_sectors_per_block) {
-			// Video sector
+		uint8_t buffer[PSX_CDROM_SECTOR_SIZE];
+		bool is_video_sector;
+
+		if (args->flags & FLAG_STR_TRAILING_AUDIO)
+			is_video_sector = (j % interleave) < video_sectors_per_block;
+		else
+			is_video_sector = (j % interleave) > 0;
+
+		if (is_video_sector) {
 			init_sector_buffer_video(args, (psx_cdrom_sector_mode2_t*) buffer, j);
 
 			int frames_used = encode_sector_str(&encoder, args->format, decoder->video_frames, buffer);
 			retire_av_data(decoder, 0, frames_used);
 		} else {
-			// Audio sector
 			int samples_length = decoder->audio_sample_count / args->audio_channels;
-			if (samples_length > audio_samples_per_sector) samples_length = audio_samples_per_sector;
+
+			if (samples_length > audio_samples_per_sector)
+				samples_length = audio_samples_per_sector;
 
 			// FIXME: this is an extremely hacky way to handle audio tracks
 			// shorter than the video track
@@ -438,7 +478,7 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 			buffer[0x00E] = ((t%75)%10)|(((t%75)/10)<<4);
 		}
 
-		if((j%interleave) < video_sectors_per_block)
+		if (is_video_sector)
 			psx_cdrom_calculate_checksums((psx_cdrom_sector_t *)buffer, PSX_CDROM_SECTOR_TYPE_MODE2_FORM1);
 
 		fwrite(buffer + offset, sector_size, 1, output);
@@ -461,7 +501,11 @@ void encode_file_str(args_t *args, decoder_t *decoder, FILE *output) {
 	destroy_mdec_encoder(&encoder);
 }
 
-void encode_file_sbs(args_t *args, decoder_t *decoder, FILE *output) {
+void encode_file_strspu(const args_t *args, decoder_t *decoder, FILE *output) {
+	// TODO: implement
+}
+
+void encode_file_sbs(const args_t *args, decoder_t *decoder, FILE *output) {
 	mdec_encoder_t encoder;
 	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
 

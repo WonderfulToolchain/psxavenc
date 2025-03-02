@@ -26,19 +26,19 @@ freely, subject to the following restrictions:
 
 #include <stdbool.h>
 
-#define NUM_FORMATS 11
+#define NUM_FORMATS   11
 #define NUM_BS_CODECS 3
 
 enum {
-	FLAG_IGNORE_OPTIONS = 1 << 0,
-	FLAG_QUIET = 1 << 1,
-	FLAG_HIDE_PROGRESS = 1 << 2,
-	FLAG_PRINT_HELP = 1 << 3,
-	FLAG_PRINT_VERSION = 1 << 4,
-	FLAG_SPU_LOOP_END = 1 << 5,
+	FLAG_IGNORE_OPTIONS       = 1 << 0,
+	FLAG_QUIET                = 1 << 1,
+	FLAG_HIDE_PROGRESS        = 1 << 2,
+	FLAG_PRINT_HELP           = 1 << 3,
+	FLAG_PRINT_VERSION        = 1 << 4,
+	FLAG_SPU_LOOP_END         = 1 << 5,
 	FLAG_SPU_NO_LEADING_DUMMY = 1 << 6,
-	FLAG_BS_IGNORE_ASPECT = 1 << 7,
-	FLAG_STR_TRAILING_AUDIO = 1 << 8
+	FLAG_BS_IGNORE_ASPECT     = 1 << 7,
+	FLAG_STR_TRAILING_AUDIO   = 1 << 8
 };
 
 typedef enum {

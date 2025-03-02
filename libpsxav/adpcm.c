@@ -29,8 +29,8 @@ freely, subject to the following restrictions:
 #define SHIFT_RANGE_4BPS 12
 #define SHIFT_RANGE_8BPS 8
 
-#define ADPCM_FILTER_COUNT 5
-#define XA_ADPCM_FILTER_COUNT 4
+#define ADPCM_FILTER_COUNT     5
+#define XA_ADPCM_FILTER_COUNT  4
 #define SPU_ADPCM_FILTER_COUNT 5
 
 static const int16_t filter_k1[ADPCM_FILTER_COUNT] = {0, 60, 115, 98, 122};
@@ -54,7 +54,7 @@ static int find_min_shift(const psx_audio_encoder_channel_state_t *state, int16_
 
 	int32_t s_min = 0;
 	int32_t s_max = 0;
-	for (int i = 0; i < 28; i++) {
+	for (int i = 0; i < PSX_AUDIO_SPU_SAMPLES_PER_BLOCK; i++) {
 		int32_t raw_sample = (i >= sample_limit) ? 0 : samples[i * pitch];
 		int32_t previous_values = (k1*prev1 + k2*prev2 + (1<<5))>>6;
 		int32_t sample = raw_sample - previous_values;
@@ -87,7 +87,7 @@ static uint8_t attempt_to_encode(psx_audio_encoder_channel_state_t *outstate, co
 
 	outstate->mse = 0;
 
-	for (int i = 0; i < 28; i++) {
+	for (int i = 0; i < PSX_AUDIO_SPU_SAMPLES_PER_BLOCK; i++) {
 		int32_t sample = ((i >= sample_limit) ? 0 : samples[i * pitch]) + outstate->qerr;
 		int32_t previous_values = (k1*outstate->prev1 + k2*outstate->prev2 + (1<<5))>>6;
 		int32_t sample_enc = sample - previous_values;
@@ -205,23 +205,15 @@ uint32_t psx_audio_xa_get_buffer_size(psx_audio_xa_settings_t settings, int samp
 }
 
 uint32_t psx_audio_spu_get_buffer_size(int sample_count) {
-	return ((sample_count + 27) / 28) << 4;
+	return ((sample_count + PSX_AUDIO_SPU_SAMPLES_PER_BLOCK - 1) / PSX_AUDIO_SPU_SAMPLES_PER_BLOCK) << 4;
 }
 
 uint32_t psx_audio_xa_get_buffer_size_per_sector(psx_audio_xa_settings_t settings) {
 	return settings.format == PSX_AUDIO_XA_FORMAT_XA ? 2336 : 2352;
 }
 
-uint32_t psx_audio_spu_get_buffer_size_per_block(void) {
-	return 16;
-}
-
 uint32_t psx_audio_xa_get_samples_per_sector(psx_audio_xa_settings_t settings) {
 	return (((settings.bits_per_sample == 8) ? 112 : 224) >> (settings.stereo ? 1 : 0)) * 18;
-}
-
-uint32_t psx_audio_spu_get_samples_per_block(void) {
-	return 28;
 }
 
 uint32_t psx_audio_xa_get_sector_interleave(psx_audio_xa_settings_t settings) {
@@ -307,14 +299,14 @@ int psx_audio_xa_encode_simple(psx_audio_xa_settings_t settings, int16_t* sample
 }
 
 int psx_audio_spu_encode(psx_audio_encoder_channel_state_t *state, int16_t* samples, int sample_count, int pitch, uint8_t *output) {
-	uint8_t prebuf[28];
+	uint8_t prebuf[PSX_AUDIO_SPU_SAMPLES_PER_BLOCK];
 	uint8_t *buffer = output;
 
-	for (int i = 0; i < sample_count; i += 28, buffer += 16) {
+	for (int i = 0; i < sample_count; i += PSX_AUDIO_SPU_SAMPLES_PER_BLOCK, buffer += PSX_AUDIO_SPU_BLOCK_SIZE) {
 		buffer[0] = encode(state, samples + i * pitch, sample_count - i, pitch, prebuf, 0, 1, SPU_ADPCM_FILTER_COUNT, SHIFT_RANGE_4BPS);
 		buffer[1] = 0;
 
-		for (int j = 0; j < 28; j+=2) {
+		for (int j = 0; j < PSX_AUDIO_SPU_SAMPLES_PER_BLOCK; j+=2) {
 			buffer[2 + (j>>1)] = (prebuf[j] & 0x0F) | (prebuf[j+1] << 4);
 		}
 	}
@@ -327,24 +319,24 @@ int psx_audio_spu_encode_simple(int16_t* samples, int sample_count, uint8_t *out
 	memset(&state, 0, sizeof(psx_audio_encoder_channel_state_t));
 	int length = psx_audio_spu_encode(&state, samples, sample_count, 1, output);
 
-	if (length >= 32) {
+	if (length >= PSX_AUDIO_SPU_BLOCK_SIZE) {
+		uint8_t *last_block = output + length - PSX_AUDIO_SPU_BLOCK_SIZE;
+
 		if (loop_start < 0) {
-			//output[1] = PSX_AUDIO_SPU_LOOP_START;
-			output[length - 16 + 1] = PSX_AUDIO_SPU_LOOP_END;
+			last_block[1] |= PSX_AUDIO_SPU_LOOP_END;
+
+			// Insert trailing looping block
+			memset(output + length, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+			output[length + 1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+
+			length += PSX_AUDIO_SPU_BLOCK_SIZE;
 		} else {
-			psx_audio_spu_set_flag_at_sample(output, loop_start, PSX_AUDIO_SPU_LOOP_START);
-			output[length - 16 + 1] = PSX_AUDIO_SPU_LOOP_REPEAT;
+			int loop_start_offset = loop_start / PSX_AUDIO_SPU_SAMPLES_PER_BLOCK * PSX_AUDIO_SPU_BLOCK_SIZE;
+
+			last_block[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
+			output[loop_start_offset + 1] |= PSX_AUDIO_SPU_LOOP_START;
 		}
-	} else if (length >= 16) {
-		output[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
-		if (loop_start >= 0)
-			output[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
 	}
 
 	return length;
-}
-
-void psx_audio_spu_set_flag_at_sample(uint8_t* spu_data, int sample_pos, int flag) {
-	int buffer_pos = (sample_pos / 28) << 4;
-	spu_data[buffer_pos + 1] = flag;
 }

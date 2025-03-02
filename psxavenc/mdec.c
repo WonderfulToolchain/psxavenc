@@ -23,6 +23,7 @@ freely, subject to the following restrictions:
 */
 
 #include <assert.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -236,14 +237,16 @@ static const uint8_t dct_zagzig_table[8*8] = {
 };
 
 #if 0
-#define SF0 0x5a82 // cos(0/16 * pi) * sqrt(2)
-#define SF1 0x7d8a // cos(1/16 * pi) * 2
-#define SF2 0x7641 // cos(2/16 * pi) * 2
-#define SF3 0x6a6d // cos(3/16 * pi) * 2
-#define SF4 0x5a82 // cos(4/16 * pi) * 2
-#define SF5 0x471c // cos(5/16 * pi) * 2
-#define SF6 0x30fb // cos(6/16 * pi) * 2
-#define SF7 0x18f8 // cos(7/16 * pi) * 2
+enum {
+	SF0 = 0x5a82, // cos(0/16 * pi) * sqrt(2)
+	SF1 = 0x7d8a, // cos(1/16 * pi) * 2
+	SF2 = 0x7641, // cos(2/16 * pi) * 2
+	SF3 = 0x6a6d, // cos(3/16 * pi) * 2
+	SF4 = 0x5a82, // cos(4/16 * pi) * 2
+	SF5 = 0x471c, // cos(5/16 * pi) * 2
+	SF6 = 0x30fb, // cos(6/16 * pi) * 2
+	SF7 = 0x18f8  // cos(7/16 * pi) * 2
+};
 
 static const int16_t dct_scale_table[8*8] = {
 	SF0,  SF0,  SF0,  SF0,  SF0,  SF0,  SF0,  SF0,
@@ -525,7 +528,9 @@ bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int vide
 	if (
 		state->dct_context == NULL ||
 		state->ac_huffman_map == NULL ||
-		state->coeff_clamp_map == NULL
+		state->dc_huffman_map == NULL ||
+		state->coeff_clamp_map == NULL ||
+		state->delta_clamp_map == NULL
 	)
 		return false;
 
@@ -536,7 +541,7 @@ bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int vide
 	for (int i = 0; i < 6; i++) {
 		state->dct_block_lists[i] = malloc(dct_block_size);
 
-		if (!state->dct_block_lists[i])
+		if (state->dct_block_lists[i] == NULL)
 			return false;
 	}
 

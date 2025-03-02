@@ -32,4 +32,5 @@ void encode_file_xa(const args_t *args, decoder_t *decoder, FILE *output);
 void encode_file_spu(const args_t *args, decoder_t *decoder, FILE *output);
 void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output);
 void encode_file_str(const args_t *args, decoder_t *decoder, FILE *output);
+void encode_file_strspu(const args_t *args, decoder_t *decoder, FILE *output);
 void encode_file_sbs(const args_t *args, decoder_t *decoder, FILE *output);

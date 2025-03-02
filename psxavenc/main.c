@@ -120,7 +120,6 @@ int main(int argc, const char **argv) {
 
 		case FORMAT_STR:
 		case FORMAT_STRCD:
-		case FORMAT_STRSPU:
 		case FORMAT_STRV:
 			if (!(args.flags & FLAG_QUIET)) {
 				if (decoder.state.audio_stream)
@@ -145,6 +144,30 @@ int main(int argc, const char **argv) {
 			}
 
 			encode_file_str(&args, &decoder, output);
+			break;
+
+		case FORMAT_STRSPU:
+			if (!(args.flags & FLAG_QUIET)) {
+				if (decoder.state.audio_stream)
+					fprintf(
+						stderr,
+						"Audio format: SPU-ADPCM, %d Hz %d channels, interleave=%d\n",
+						args.audio_frequency,
+						args.audio_channels,
+						args.audio_interleave
+					);
+
+				fprintf(
+					stderr,
+					"Video format: %s, %dx%d, %.2f fps\n",
+					bs_codec_names[args.video_codec],
+					args.video_width,
+					args.video_height,
+					(double)args.str_fps_num / (double)args.str_fps_den
+				);
+			}
+
+			encode_file_strspu(&args, &decoder, output);
 			break;
 
 		case FORMAT_SBS:
