@@ -288,11 +288,11 @@ static void init_dct_data(mdec_encoder_state_t *state, bs_codec_t codec) {
 		uint32_t base_value = dc_c_huffman_tree[i].c_value;
 
 		int pos_offset = 1 << dc_bits;
-		int neg_offset = 1 - (1 << (dc_bits + 1));
+		int neg_offset = pos_offset * 2 - 1;
 
 		for (int j = 0; j < (1 << dc_bits); j++) {
 			int pos = (j + pos_offset) & 0x1FF;
-			int neg = (j + neg_offset) & 0x1FF;
+			int neg = (j - neg_offset) & 0x1FF;
 
 			state->dc_huffman_map[(INDEX_CR << 9) | pos] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (1 << dc_bits) | j);
 			state->dc_huffman_map[(INDEX_CR << 9) | neg] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (0 << dc_bits) | j);
@@ -306,11 +306,11 @@ static void init_dct_data(mdec_encoder_state_t *state, bs_codec_t codec) {
 		uint32_t base_value = dc_y_huffman_tree[i].c_value;
 
 		int pos_offset = 1 << dc_bits;
-		int neg_offset = 1 - (1 << (dc_bits + 1));
+		int neg_offset = pos_offset * 2 - 1;
 
 		for (int j = 0; j < (1 << dc_bits); j++) {
 			int pos = (j + pos_offset) & 0x1FF;
-			int neg = (j + neg_offset) & 0x1FF;
+			int neg = (j - neg_offset) & 0x1FF;
 
 			state->dc_huffman_map[(INDEX_Y << 9) | pos] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (1 << dc_bits) | j);
 			state->dc_huffman_map[(INDEX_Y << 9) | neg] = HUFFMAN_CODE(bits, (base_value << (dc_bits + 1)) | (0 << dc_bits) | j);
@@ -657,7 +657,7 @@ void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
 	// Attempt encoding the frame at the maximum quality. If the result is too
 	// large, increase the quantization scale and try again.
 	// TODO: if a frame encoded at scale N is too large but the same frame
-	// encoded at scale N-1 leaves a significant amount of free space, attempt
+	// encoded at scale N+1 leaves a significant amount of free space, attempt
 	// compressing at scale N but optimizing coefficients away until it fits
 	// (like the old algorithm did)
 	for (

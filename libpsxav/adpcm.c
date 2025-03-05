@@ -228,14 +228,9 @@ static inline void psx_audio_xa_sync_subheader_copy(psx_cdrom_sector_mode2_t *bu
 	memcpy(buffer->subheader + 1, buffer->subheader, sizeof(psx_cdrom_sector_xa_subheader_t));
 }
 
-static void psx_audio_xa_encode_init_sector(psx_cdrom_sector_mode2_t *buffer, psx_audio_xa_settings_t settings) {
-	if (settings.format == PSX_AUDIO_XA_FORMAT_XACD) {
-		memset(buffer, 0, PSX_CDROM_SECTOR_SIZE);
-		memset(buffer->sync + 1, 0xFF, 10);
-		buffer->header.mode = 0x02;
-	} else {
-		memset(buffer->subheader, 0, PSX_CDROM_SECTOR_SIZE - 16);
-	}
+static void psx_audio_xa_encode_init_sector(psx_cdrom_sector_mode2_t *buffer, int lba, psx_audio_xa_settings_t settings) {
+	if (settings.format == PSX_AUDIO_XA_FORMAT_XACD)
+		psx_cdrom_init_sector((psx_cdrom_sector_t *)buffer, lba, PSX_CDROM_SECTOR_TYPE_MODE2_FORM2);
 
 	buffer->subheader[0].file = settings.file_number;
 	buffer->subheader[0].channel = settings.channel_number & PSX_CDROM_SECTOR_XA_CHANNEL_MASK;
@@ -243,28 +238,46 @@ static void psx_audio_xa_encode_init_sector(psx_cdrom_sector_mode2_t *buffer, ps
 		PSX_CDROM_SECTOR_XA_SUBMODE_AUDIO
 		| PSX_CDROM_SECTOR_XA_SUBMODE_FORM2
 		| PSX_CDROM_SECTOR_XA_SUBMODE_RT;
-	buffer->subheader[0].coding =
-		(settings.stereo ? PSX_CDROM_SECTOR_XA_CODING_STEREO : PSX_CDROM_SECTOR_XA_CODING_MONO)
-		| (settings.frequency >= PSX_AUDIO_XA_FREQ_DOUBLE ? PSX_CDROM_SECTOR_XA_CODING_FREQ_DOUBLE : PSX_CDROM_SECTOR_XA_CODING_FREQ_SINGLE)
-		| (settings.bits_per_sample >= 8 ? PSX_CDROM_SECTOR_XA_CODING_BITS_8 : PSX_CDROM_SECTOR_XA_CODING_BITS_4);
+
+	if (settings.stereo)
+		buffer->subheader[0].coding |= PSX_CDROM_SECTOR_XA_CODING_STEREO;
+	else
+		buffer->subheader[0].coding |= PSX_CDROM_SECTOR_XA_CODING_MONO;
+	if (settings.frequency == PSX_AUDIO_XA_FREQ_DOUBLE)
+		buffer->subheader[0].coding |= PSX_CDROM_SECTOR_XA_CODING_FREQ_DOUBLE;
+	else
+		buffer->subheader[0].coding |= PSX_CDROM_SECTOR_XA_CODING_FREQ_SINGLE;
+	if (settings.bits_per_sample == 8)
+		buffer->subheader[0].coding |= PSX_CDROM_SECTOR_XA_CODING_BITS_8;
+	else
+		buffer->subheader[0].coding |= PSX_CDROM_SECTOR_XA_CODING_BITS_4;
+
 	psx_audio_xa_sync_subheader_copy(buffer);
 }
 
-int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_state_t *state, int16_t* samples, int sample_count, uint8_t *output) {
+int psx_audio_xa_encode(
+	psx_audio_xa_settings_t settings,
+	psx_audio_encoder_state_t *state,
+	int16_t* samples,
+	int sample_count,
+	int lba,
+	uint8_t *output
+) {
 	int sample_jump = (settings.bits_per_sample == 8) ? 112 : 224;
 	int i, j;
-	int xa_sector_size = settings.format == PSX_AUDIO_XA_FORMAT_XA ? 2336 : 2352;
-	int xa_offset = 2352 - xa_sector_size;
+	int xa_sector_size = psx_audio_xa_get_buffer_size_per_sector(settings);
+	int xa_offset = PSX_CDROM_SECTOR_SIZE - xa_sector_size;
 	uint8_t init_sector = 1;
 
-	if (settings.stereo) { sample_count <<= 1; }
+	if (settings.stereo)
+		sample_count *= 2;
 
 	for (i = 0, j = 0; i < sample_count || ((j % 18) != 0); i += sample_jump, j++) {
 		psx_cdrom_sector_mode2_t *sector_data = (psx_cdrom_sector_mode2_t*) (output + ((j/18) * xa_sector_size) - xa_offset);
 		uint8_t *block_data = sector_data->data + ((j%18) * 0x80);
 
 		if (init_sector) {
-			psx_audio_xa_encode_init_sector(sector_data, settings);
+			psx_audio_xa_encode_init_sector(sector_data, lba, settings);
 			init_sector = 0;
 		}
 
@@ -276,6 +289,7 @@ int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_stat
 		if ((j+1)%18 == 0) {
 			psx_cdrom_calculate_checksums((psx_cdrom_sector_t *)sector_data, PSX_CDROM_SECTOR_TYPE_MODE2_FORM2);
 			init_sector = 1;
+			lba++;
 		}
 	}
 
@@ -284,21 +298,33 @@ int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_stat
 
 void psx_audio_xa_encode_finalize(psx_audio_xa_settings_t settings, uint8_t *output, int output_length) {
 	if (output_length >= 2336) {
-		psx_cdrom_sector_mode2_t *sector = (psx_cdrom_sector_mode2_t*) &output[output_length - 2352];
+		psx_cdrom_sector_mode2_t *sector = (psx_cdrom_sector_mode2_t*) &output[output_length - PSX_CDROM_SECTOR_SIZE];
 		sector->subheader[0].submode |= PSX_CDROM_SECTOR_XA_SUBMODE_EOF;
 		psx_audio_xa_sync_subheader_copy(sector);
 	}
 }
 
-int psx_audio_xa_encode_simple(psx_audio_xa_settings_t settings, int16_t* samples, int sample_count, uint8_t *output) {
+int psx_audio_xa_encode_simple(
+	psx_audio_xa_settings_t settings,
+	int16_t* samples,
+	int sample_count,
+	int lba,
+	uint8_t *output
+) {
 	psx_audio_encoder_state_t state;
 	memset(&state, 0, sizeof(psx_audio_encoder_state_t));
-	int length = psx_audio_xa_encode(settings, &state, samples, sample_count, output);
+	int length = psx_audio_xa_encode(settings, &state, samples, sample_count, lba, output);
 	psx_audio_xa_encode_finalize(settings, output, length);
 	return length;
 }
 
-int psx_audio_spu_encode(psx_audio_encoder_channel_state_t *state, int16_t* samples, int sample_count, int pitch, uint8_t *output) {
+int psx_audio_spu_encode(
+	psx_audio_encoder_channel_state_t *state,
+	int16_t* samples,
+	int sample_count,
+	int pitch,
+	uint8_t *output
+) {
 	uint8_t prebuf[PSX_AUDIO_SPU_SAMPLES_PER_BLOCK];
 	uint8_t *buffer = output;
 

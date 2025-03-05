@@ -42,11 +42,21 @@ static uint32_t edc_crc32(uint8_t *data, int length) {
 
 #define TO_BCD(x) ((x) + ((x) / 10) * 6)
 
+void psx_cdrom_init_xa_subheader(psx_cdrom_sector_xa_subheader_t *subheader, psx_cdrom_sector_type_t type) {
+	memset(subheader, 0, sizeof(psx_cdrom_sector_xa_subheader_t) * 2);
+	subheader->submode = PSX_CDROM_SECTOR_XA_SUBMODE_DATA;
+
+	if (type == PSX_CDROM_SECTOR_TYPE_MODE2_FORM2)
+		subheader->submode |= PSX_CDROM_SECTOR_XA_SUBMODE_FORM2;
+
+	memcpy(subheader + 1, subheader, sizeof(psx_cdrom_sector_xa_subheader_t));
+}
+
 void psx_cdrom_init_sector(psx_cdrom_sector_t *sector, int lba, psx_cdrom_sector_type_t type) {
 	// Sync sequence
 	memset(sector->mode1.sync + 1, 0xff, 10);
 	sector->mode1.sync[0x0] = 0x00;
-	sector->mode1.sync[0xb] = 0x00;
+	sector->mode1.sync[0xB] = 0x00;
 
 	// Timecode
 	lba += 150;
@@ -59,14 +69,7 @@ void psx_cdrom_init_sector(psx_cdrom_sector_t *sector, int lba, psx_cdrom_sector
 		sector->mode1.header.mode = 0x01;
 	} else {
 		sector->mode2.header.mode = 0x02;
-
-		memset(sector->mode2.subheader, 0, sizeof(psx_cdrom_sector_xa_subheader_t));
-		sector->mode2.subheader[0].submode = PSX_CDROM_SECTOR_XA_SUBMODE_DATA;
-
-		if (type == PSX_CDROM_SECTOR_TYPE_MODE2_FORM2)
-			sector->mode2.subheader[0].submode |= PSX_CDROM_SECTOR_XA_SUBMODE_FORM2;
-
-		memcpy(sector->mode2.subheader + 1, sector->mode2.subheader, sizeof(psx_cdrom_sector_xa_subheader_t));
+		psx_cdrom_init_xa_subheader(sector->mode2.subheader, type);
 	}
 }
 

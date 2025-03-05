@@ -72,9 +72,28 @@ uint32_t psx_audio_spu_get_buffer_size(int sample_count);
 uint32_t psx_audio_xa_get_buffer_size_per_sector(psx_audio_xa_settings_t settings);
 uint32_t psx_audio_xa_get_samples_per_sector(psx_audio_xa_settings_t settings);
 uint32_t psx_audio_xa_get_sector_interleave(psx_audio_xa_settings_t settings);
-int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_state_t *state, int16_t* samples, int sample_count, uint8_t *output);
-int psx_audio_xa_encode_simple(psx_audio_xa_settings_t settings, int16_t* samples, int sample_count, uint8_t *output);
-int psx_audio_spu_encode(psx_audio_encoder_channel_state_t *state, int16_t* samples, int sample_count, int pitch, uint8_t *output);
+int psx_audio_xa_encode(
+	psx_audio_xa_settings_t settings,
+	psx_audio_encoder_state_t *state,
+	int16_t* samples,
+	int sample_count,
+	int lba,
+	uint8_t *output
+);
+int psx_audio_xa_encode_simple(
+	psx_audio_xa_settings_t settings,
+	int16_t* samples,
+	int sample_count,
+	int lba,
+	uint8_t *output
+);
+int psx_audio_spu_encode(
+	psx_audio_encoder_channel_state_t *state,
+	int16_t* samples,
+	int sample_count,
+	int pitch,
+	uint8_t *output
+);
 int psx_audio_spu_encode_simple(int16_t* samples, int sample_count, uint8_t *output, int loop_start);
 void psx_audio_xa_encode_finalize(psx_audio_xa_settings_t settings, uint8_t *output, int output_length);
 
@@ -149,5 +168,6 @@ typedef enum {
 	PSX_CDROM_SECTOR_TYPE_MODE2_FORM2
 } psx_cdrom_sector_type_t;
 
+void psx_cdrom_init_xa_subheader(psx_cdrom_sector_xa_subheader_t *subheader, psx_cdrom_sector_type_t type);
 void psx_cdrom_init_sector(psx_cdrom_sector_t *sector, int lba, psx_cdrom_sector_type_t type);
 void psx_cdrom_calculate_checksums(psx_cdrom_sector_t *sector, psx_cdrom_sector_type_t type);
