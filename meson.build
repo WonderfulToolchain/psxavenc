@@ -9,24 +9,24 @@ configure_file(output: 'config.h', configuration: conf_data)
 libm_dep = meson.get_compiler('c').find_library('m')
 
 ffmpeg = [
-  dependency('libavformat'),
-  dependency('libavcodec'),
-  dependency('libavutil'),
-  dependency('libswresample'),
-  dependency('libswscale')
+	dependency('libavformat'),
+	dependency('libavcodec'),
+	dependency('libavutil'),
+	dependency('libswresample'),
+	dependency('libswscale')
 ]
 
 libpsxav = static_library('psxav', [
-  'libpsxav/adpcm.c',
-  'libpsxav/cdrom.c',
-  'libpsxav/libpsxav.h'
+	'libpsxav/adpcm.c',
+	'libpsxav/cdrom.c',
+	'libpsxav/libpsxav.h'
 ])
 libpsxav_dep = declare_dependency(include_directories: include_directories('libpsxav'), link_with: libpsxav)
 
 executable('psxavenc', [
-  'psxavenc/cdrom.c',
-  'psxavenc/decoding.c',
-  'psxavenc/filefmt.c',
-  'psxavenc/mdec.c',
-  'psxavenc/psxavenc.c'
+	'psxavenc/args.c',
+	'psxavenc/decoding.c',
+	'psxavenc/filefmt.c',
+	'psxavenc/main.c',
+	'psxavenc/mdec.c'
 ], dependencies: [libm_dep, ffmpeg, libpsxav_dep], install: true)

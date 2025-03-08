@@ -2,7 +2,7 @@
 # psxavenc
 
 psxavenc is an open-source command-line tool for encoding audio and video data
-into formats commonly used on the original PlayStation.
+into formats commonly used on the original PlayStation and PlayStation 2.
 
 ## Installation
 
@@ -14,22 +14,22 @@ Requirements:
 
 ```shell
 $ meson setup build
-$ cd build
-$ ninja install
+$ meson compile -C build
+$ meson install -C build
 ```
 
 ## Usage
 
-Run `psxavenc`.
+Run `psxavenc -h`.
 
 ### Examples
 
 Rescale a video file to ≤320x240 pixels (preserving aspect ratio) and encode it
-into a 15fps .STR file with 37800 Hz 4-bit stereo audio and 2352-byte sectors,
-meant to be played at 2x CD-ROM speed:
+into a 15 fps version 2 .str file with 37800 Hz 4-bit stereo audio and 2352-byte
+sectors, meant to be played at 2x CD-ROM speed:
 
 ```shell
-$ psxavenc -t str2cd -f 37800 -b 4 -c 2 -s 320x240 -r 15 -x 2 in.mp4 out.str
+$ psxavenc -t strcd -v v2 -f 37800 -b 4 -c 2 -s 320x240 -r 15 -x 2 in.mp4 out.str
 ```
 
 Convert a mono audio sample to 22050 Hz raw SPU-ADPCM data:
@@ -38,36 +38,77 @@ Convert a mono audio sample to 22050 Hz raw SPU-ADPCM data:
 $ psxavenc -t spu -f 22050 in.ogg out.snd
 ```
 
-Convert a stereo audio file to a 44100 Hz interleaved .VAG file with 8192-byte
+Convert a stereo audio file to a 44100 Hz interleaved .vag file with 2048-byte
 interleave and loop flags set at the end of each interleaved chunk:
 
 ```shell
-$ psxavenc -t vagi -f 44100 -c 2 -L -i 8192 in.wav out.vag
+$ psxavenc -t vagi -f 44100 -c 2 -L -i 2048 in.wav out.vag
 ```
 
-## Supported formats
+## Supported output formats
 
-| Format   | Audio            | Channels | Video | Sector size |
-| :------- | :--------------- | :------- | :---- | :---------- |
-| `xa`     | XA-ADPCM         | 1 or 2   | None  | 2336 bytes  |
-| `xacd`   | XA-ADPCM         | 1 or 2   | None  | 2352 bytes  |
-| `spu`    | SPU-ADPCM        | 1        | None  |             |
-| `spui`   | SPU-ADPCM        | Any      | None  | Any         |
-| `vag`    | SPU-ADPCM        | 1        | None  |             |
-| `vagi`   | SPU-ADPCM        | Any      | None  | Any         |
-| `str2`   | None or XA-ADPCM | 1 or 2   | BS v2 | 2336 bytes  |
-| `str2cd` | None or XA-ADPCM | 1 or 2   | BS v2 | 2352 bytes  |
-| `str2v`  | None             |          | BS v2 |             |
-| `sbs2`   | None             |          | BS v2 | Any         |
+The output format must be set using the `-t` option.
+
+| Format  | Audio codec          | Audio channels | Video codec   | Sector size |
+| :------ | :------------------- | :------------- | :------------ | :---------- |
+| `xa`    | XA-ADPCM             | 1 or 2         |               | 2336 bytes  |
+| `xacd`  | XA-ADPCM             | 1 or 2         |               | 2352 bytes  |
+| `spu`   | SPU-ADPCM            | 1              |               |             |
+| `vag`   | SPU-ADPCM            | 1              |               |             |
+| `spui`  | SPU-ADPCM            | Any            |               |             |
+| `vagi`  | SPU-ADPCM            | Any            |               |             |
+| `str`   | XA-ADPCM (optional)  | 1 or 2         | BS v2/v3/v3dc | 2336 bytes  |
+| `strcd` | XA-ADPCM (optional)  | 1 or 2         | BS v2/v3/v3dc | 2352 bytes  |
+| `strv`  |                      |                | BS v2/v3/v3dc | 2048 bytes  |
+| `sbs`   |                      |                | BS v2/v3/v3dc |             |
 
 Notes:
 
-- `vag` and `vagi` are similar to `spu` and `spui` respectively, but add a .VAG
+- The `xa`, `xacd`, `str` and `strcd` formats will output files with 2336- or
+  2352-byte CD-ROM sectors, containing the appropriate CD-XA subheaders and
+  dummy EDC/ECC placeholders in addition to the actual sector data. Such files
+  **cannot be added to a disc image as-is** and must instead be parsed by an
+  authoring tool capable of rebuilding the EDC/ECC data (as it is dependent on
+  the file's absolute location on the disc) and generating a Mode 2 CD-ROM image
+  with "native" 2352-byte sectors.
+- Similarly, files generated with `-t xa` or `-t xacd` **must be interleaved**
+  **with other XA-ADPCM tracks or empty padding using an external tool** before
+  they can be played.
+- `vag` and `vagi` are similar to `spu` and `spui` respectively, but add a .vag
   header at the beginning of the file. The header is always 48 bytes long for
   `vag` files, while in the case of `vagi` files it is padded to the size
   specified using the `-a` option (2048 bytes by default). Note that `vagi`
   files with more than 2 channels and/or alignment other than 2048 bytes are not
   standardized.
-- The `sbs2` format (used in some System 573 games) is simply a series of
-  concatenated BS v2 frames, each padded to the size specified by the `-a`
-  option, with no additional headers besides the BS frame headers.
+- ~~The `strspu` format encodes the input file's audio track as a series of~~
+  ~~custom .str chunks (type ID `0x0001` by default) holding interleaved~~
+  ~~SPU-ADPCM data in the same format as `spui`, rather than XA-ADPCM. As .str~~
+  ~~chunks do not require custom XA subheaders, a file with standard 2048-byte~~
+  ~~sectors that does not need any special handling will be generated.~~ *This*
+  *format has not yet been implemented.*
+- The `strv` format disables audio altogether and is equivalent to `strspu` on
+  an input file with no audio track.
+- The `sbs` format (used in some System 573 games) consists of a series of
+  concatenated BS frames, each padded to the size specified by the `-a` option
+  (the default setting is 8192 bytes), with no additional headers besides the BS
+  frame headers.
+
+## Supported video codecs
+
+All formats with a video track (`str`, `strcd`, `strv` and `sbs`) can use any of
+the codecs listed below. The codec can be set using the `-v` option.
+
+| Codec          | Supported by          | Typ. decoder CPU usage |
+| :------------- | :-------------------- | :--------------------- |
+| `v2` (default) | All players/decoders  | Medium                 |
+| `v3`           | Most players/decoders | High                   |
+| `v3dc`         | Few players/decoders  | High                   |
+
+Notes:
+
+- The `v3dc` format is a variant of `v3` with a slightly better compression
+  ratio, however most tools and playback libraries (including FFmpeg, jPSXdec
+  and earlier versions of Sony's own BS decoder) are unable to decode it
+  correctly; its use is thus highly discouraged. Refer to
+  [the psx-spx section on DC coefficient encoding](https://psx-spx.consoledev.net/cdromfileformats/#dc-v3)
+  for more details.

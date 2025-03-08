@@ -1,0 +1,6 @@
+desktop.ini
+.DS_Store
+.vscode/
+build/
+.cache/
+*.code-workspace

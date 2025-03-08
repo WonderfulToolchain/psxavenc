@@ -22,30 +22,52 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 */
 
-#include "common.h"
+#include <assert.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libavutil/opt.h>
+#include <libavcodec/avcodec.h>
+#include <libavcodec/avdct.h>
+#include <libavformat/avformat.h>
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
+#include "args.h"
+#include "decoding.h"
 
-int decode_frame(AVCodecContext *codec, AVFrame *frame, int *frame_size, AVPacket *packet) {
-	int ret;
-
+static bool decode_frame(AVCodecContext *codec, AVFrame *frame, int *frame_size, AVPacket *packet) {
 	if (packet != NULL) {
-		ret = avcodec_send_packet(codec, packet);
-		if (ret != 0) {
-			return 0;
-		}
+		if (avcodec_send_packet(codec, packet) != 0)
+			return false;
 	}
 
-	ret = avcodec_receive_frame(codec, frame);
+	int ret = avcodec_receive_frame(codec, frame);
+
 	if (ret >= 0) {
 		*frame_size = ret;
-		return 1;
-	} else {
-		return ret == AVERROR(EAGAIN) ? 1 : 0;
+		return true;
 	}
+	if (ret == AVERROR(EAGAIN))
+		return true;
+
+	return false;
 }
 
-bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bool use_video, bool audio_required, bool video_required)
-{
-	av_decoder_state_t* av = &(settings->decoder_state_av);
+bool open_av_data(decoder_t *decoder, const args_t *args, int flags) {
+	decoder->audio_samples = NULL;
+	decoder->audio_sample_count = 0;
+	decoder->video_frames = NULL;
+	decoder->video_frame_count = 0;
+
+	decoder->video_width = args->video_width;
+	decoder->video_height = args->video_height;
+	decoder->video_fps_num = args->str_fps_num;
+	decoder->video_fps_den = args->str_fps_den;
+	decoder->end_of_input = false;
+
+	decoder_state_t *av = &(decoder->state);
+
 	av->video_next_pts = 0.0;
 	av->frame = NULL;
 	av->video_frame_dst_size = 0;
@@ -59,19 +81,17 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 	av->resampler = NULL;
 	av->scaler = NULL;
 
-	if (settings->quiet) {
+	if (args->flags & FLAG_QUIET)
 		av_log_set_level(AV_LOG_QUIET);
-	}
 
 	av->format = avformat_alloc_context();
-	if (avformat_open_input(&(av->format), filename, NULL, NULL)) {
-		return false;
-	}
-	if (avformat_find_stream_info(av->format, NULL) < 0) {
-		return false;
-	}
 
-	if (use_audio) {
+	if (avformat_open_input(&(av->format), args->input_file, NULL, NULL))
+		return false;
+	if (avformat_find_stream_info(av->format, NULL) < 0)
+		return false;
+
+	if (flags & DECODER_USE_AUDIO) {
 		for (int i = 0; i < av->format->nb_streams; i++) {
 			if (av->format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
 				if (av->audio_stream_index >= 0) {
@@ -81,13 +101,14 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 				av->audio_stream_index = i;
 			}
 		}
-		if (audio_required && av->audio_stream_index == -1) {
+
+		if ((flags & DECODER_AUDIO_REQUIRED) && av->audio_stream_index == -1) {
 			fprintf(stderr, "Input file has no audio data\n");
 			return false;
 		}
 	}
 
-	if (use_video) {
+	if (flags & DECODER_USE_VIDEO) {
 		for (int i = 0; i < av->format->nb_streams; i++) {
 			if (av->format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 				if (av->video_stream_index >= 0) {
@@ -97,7 +118,8 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 				av->video_stream_index = i;
 			}
 		}
-		if (video_required && av->video_stream_index == -1) {
+
+		if ((flags & DECODER_VIDEO_REQUIRED) && av->video_stream_index == -1) {
 			fprintf(stderr, "Input file has no video data\n");
 			return false;
 		}
@@ -109,34 +131,39 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 	if (av->audio_stream != NULL) {
 		const AVCodec *codec = avcodec_find_decoder(av->audio_stream->codecpar->codec_id);
 		av->audio_codec_context = avcodec_alloc_context3(codec);
-		if (av->audio_codec_context == NULL) {
+
+		if (av->audio_codec_context == NULL)
 			return false;
-		}
-		if (avcodec_parameters_to_context(av->audio_codec_context, av->audio_stream->codecpar) < 0) {
+		if (avcodec_parameters_to_context(av->audio_codec_context, av->audio_stream->codecpar) < 0)
 			return false;
-		}
-		if (avcodec_open2(av->audio_codec_context, codec, NULL) < 0) {
+		if (avcodec_open2(av->audio_codec_context, codec, NULL) < 0)
 			return false;
-		}
 
 		AVChannelLayout layout;
-		layout.nb_channels = settings->channels;
-		if (settings->channels <= 2) {
+		layout.nb_channels = args->audio_channels;
+
+		if (args->audio_channels == 1) {
 			layout.order = AV_CHANNEL_ORDER_NATIVE;
-			layout.u.mask = (settings->channels == 2) ? AV_CH_LAYOUT_STEREO : AV_CH_LAYOUT_MONO;
+			layout.u.mask = AV_CH_LAYOUT_MONO;
+		} else if (args->audio_channels == 2) {
+			layout.order = AV_CHANNEL_ORDER_NATIVE;
+			layout.u.mask = AV_CH_LAYOUT_STEREO;
 		} else {
 			layout.order = AV_CHANNEL_ORDER_UNSPEC;
 		}
-		if (!settings->quiet && settings->channels > av->audio_codec_context->ch_layout.nb_channels) {
-			fprintf(stderr, "Warning: input file has less than %d channels\n", settings->channels);
+
+		if (!(args->flags & FLAG_QUIET)) {
+			if (args->audio_channels > av->audio_codec_context->ch_layout.nb_channels)
+				fprintf(stderr, "Warning: input file has less than %d channels\n", args->audio_channels);
 		}
 
-		av->sample_count_mul = settings->channels;
+		av->sample_count_mul = args->audio_channels;
+
 		if (swr_alloc_set_opts2(
 			&av->resampler,
 			&layout,
 			AV_SAMPLE_FMT_S16,
-			settings->frequency,
+			args->audio_frequency,
 			&av->audio_codec_context->ch_layout,
 			av->audio_codec_context->sample_fmt,
 			av->audio_codec_context->sample_rate,
@@ -145,47 +172,43 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 		) < 0) {
 			return false;
 		}
-		if (settings->swresample_options) {
-			if (av_opt_set_from_string(av->resampler, settings->swresample_options, NULL, "=", ":,") < 0) {
+		if (args->swresample_options) {
+			if (av_opt_set_from_string(av->resampler, args->swresample_options, NULL, "=", ":,") < 0)
 				return false;
-			}
 		}
-
-		if (swr_init(av->resampler) < 0) {
+		if (swr_init(av->resampler) < 0)
 			return false;
-		}
 	}
 
 	if (av->video_stream != NULL) {
 		const AVCodec *codec = avcodec_find_decoder(av->video_stream->codecpar->codec_id);
 		av->video_codec_context = avcodec_alloc_context3(codec);
-		if(av->video_codec_context == NULL) {
+
+		if (av->video_codec_context == NULL)
 			return false;
-		}
-		if (avcodec_parameters_to_context(av->video_codec_context, av->video_stream->codecpar) < 0) {
+		if (avcodec_parameters_to_context(av->video_codec_context, av->video_stream->codecpar) < 0)
 			return false;
-		}
-		if (avcodec_open2(av->video_codec_context, codec, NULL) < 0) {
+		if (avcodec_open2(av->video_codec_context, codec, NULL) < 0)
 			return false;
+
+		if (!(args->flags & FLAG_QUIET)) {
+			if (
+				decoder->video_width > av->video_codec_context->width ||
+				decoder->video_height > av->video_codec_context->height
+			)
+				fprintf(stderr, "Warning: input file has resolution lower than %dx%d\n", decoder->video_width, decoder->video_height);
 		}
 
-		if (!settings->quiet && (
-			settings->video_width > av->video_codec_context->width ||
-			settings->video_height > av->video_codec_context->height
-		)) {
-			fprintf(stderr, "Warning: input file has resolution lower than %dx%d\n",
-				settings->video_width, settings->video_height
-			);
-		}
-		if (!settings->ignore_aspect_ratio) {
+		if (!(args->flags & FLAG_BS_IGNORE_ASPECT)) {
 			// Reduce the provided size so that it matches the input file's
 			// aspect ratio.
 			double src_ratio = (double)av->video_codec_context->width / (double)av->video_codec_context->height;
-			double dst_ratio = (double)settings->video_width / (double)settings->video_height;
+			double dst_ratio = (double)decoder->video_width / (double)decoder->video_height;
+
 			if (src_ratio < dst_ratio) {
-				settings->video_width = (int)((double)settings->video_height * src_ratio + 15.0) & ~15;
+				decoder->video_width = (int)((double)decoder->video_height * src_ratio + 15.0) & ~15;
 			} else {
-				settings->video_height = (int)((double)settings->video_width / src_ratio + 15.0) & ~15;
+				decoder->video_height = (int)((double)decoder->video_width / src_ratio + 15.0) & ~15;
 			}
 		}
 
@@ -193,17 +216,16 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 			av->video_codec_context->width,
 			av->video_codec_context->height,
 			av->video_codec_context->pix_fmt,
-			settings->video_width,
-			settings->video_height,
+			decoder->video_width,
+			decoder->video_height,
 			AV_PIX_FMT_NV21,
 			SWS_BICUBIC,
 			NULL,
 			NULL,
 			NULL
 		);
-		if (av->scaler == NULL) {
+		if (av->scaler == NULL)
 			return false;
-		}
 		if (sws_setColorspaceDetails(
 			av->scaler,
 			sws_getCoefficients(av->video_codec_context->colorspace),
@@ -213,202 +235,229 @@ bool open_av_data(const char *filename, settings_t *settings, bool use_audio, bo
 			0,
 			1 << 16,
 			1 << 16
-		) < 0) {
+		) < 0)
 			return false;
-		}
-		if (settings->swscale_options) {
-			if (av_opt_set_from_string(av->scaler, settings->swscale_options, NULL, "=", ":,") < 0) {
+		if (args->swscale_options) {
+			if (av_opt_set_from_string(av->scaler, args->swscale_options, NULL, "=", ":,") < 0)
 				return false;
-			}
 		}
 
-		av->video_frame_dst_size = 3*settings->video_width*settings->video_height/2;
+		av->video_frame_dst_size = 3 * decoder->video_width * decoder->video_height / 2;
 	}
 
 	av->frame = av_frame_alloc();
-	if (av->frame == NULL) {
-		return false;
-	}
 
-	settings->audio_samples = NULL;
-	settings->audio_sample_count = 0;
-	settings->video_frames = NULL;
-	settings->video_frame_count = 0;
-	settings->end_of_input = false;
+	if (av->frame == NULL)
+		return false;
 
 	return true;
 }
 
-static void poll_av_packet_audio(settings_t *settings, AVPacket *packet)
-{
-	av_decoder_state_t* av = &(settings->decoder_state_av);
-
-	int frame_size, frame_sample_count;
-	uint8_t *buffer[1];
-
-	if (decode_frame(av->audio_codec_context, av->frame, &frame_size, packet)) {
-		size_t buffer_size = sizeof(int16_t) * av->sample_count_mul * swr_get_out_samples(av->resampler, av->frame->nb_samples);
-		buffer[0] = malloc(buffer_size);
-		memset(buffer[0], 0, buffer_size);
-		frame_sample_count = swr_convert(av->resampler, buffer, av->frame->nb_samples, (const uint8_t**)av->frame->data, av->frame->nb_samples);
-		settings->audio_samples = realloc(settings->audio_samples, (settings->audio_sample_count + ((frame_sample_count + 4032) * av->sample_count_mul)) * sizeof(int16_t));
-		memmove(&(settings->audio_samples[settings->audio_sample_count]), buffer[0], sizeof(int16_t) * frame_sample_count * av->sample_count_mul);
-		settings->audio_sample_count += frame_sample_count * av->sample_count_mul;
-		free(buffer[0]);
-	}
-}
-
-static void poll_av_packet_video(settings_t *settings, AVPacket *packet)
-{
-	av_decoder_state_t* av = &(settings->decoder_state_av);
+static void poll_av_packet_audio(decoder_t *decoder, AVPacket *packet) {
+	decoder_state_t *av = &(decoder->state);
 
 	int frame_size;
-	double pts_step = ((double)1.0*(double)settings->video_fps_den)/(double)settings->video_fps_num;
 
-	int plane_size = settings->video_width*settings->video_height;
-	int dst_strides[2] = {
-		settings->video_width, settings->video_width
-	};
+	if (!decode_frame(av->audio_codec_context, av->frame, &frame_size, packet))
+		return;
 
-	if (decode_frame(av->video_codec_context, av->frame, &frame_size, packet)) {
-		if (!av->frame->width || !av->frame->height || !av->frame->data[0]) {
-			return;
-		}
+	int frame_sample_count = swr_get_out_samples(av->resampler, av->frame->nb_samples);
 
-		// Some files seem to have timestamps starting from a negative value
-		// (but otherwise valid) for whatever reason.
-		double pts = (((double)av->frame->pts)*(double)av->video_stream->time_base.num)/av->video_stream->time_base.den;
-		//if (pts < 0.0) {
-			//return;
-		//}
-		if (settings->video_frame_count >= 1 && pts < av->video_next_pts) {
-			return;
-		}
-		if ((settings->video_frame_count) < 1) {
-			av->video_next_pts = pts;
-		} else {
-			av->video_next_pts += pts_step;
-		}
+	if (frame_sample_count == 0)
+		return;
 
-		//fprintf(stderr, "%d %f %f %f\n", (settings->video_frame_count), pts, av->video_next_pts, pts_step);
+	size_t buffer_size = sizeof(int16_t) * av->sample_count_mul * frame_sample_count;
+	uint8_t *buffer = malloc(buffer_size);
+	memset(buffer, 0, buffer_size);
 
-		// Insert duplicate frames if the frame rate of the input stream is
-		// lower than the target frame rate.
-		int dupe_frames = (int) ceil((pts - av->video_next_pts) / pts_step);
-		if (dupe_frames < 0) dupe_frames = 0;
-		settings->video_frames = realloc(
-			settings->video_frames,
-			(settings->video_frame_count + dupe_frames + 1) * av->video_frame_dst_size
-		);
+	frame_sample_count = swr_convert(
+		av->resampler,
+		&buffer,
+		frame_sample_count,
+		(const uint8_t**)av->frame->data,
+		av->frame->nb_samples
+	);
 
-		for (; dupe_frames; dupe_frames--) {
-			memcpy(
-				(settings->video_frames) + av->video_frame_dst_size*(settings->video_frame_count),
-				(settings->video_frames) + av->video_frame_dst_size*(settings->video_frame_count-1),
-				av->video_frame_dst_size
-			);
-			settings->video_frame_count += 1;
-			av->video_next_pts += pts_step;
-		}
-
-		uint8_t *dst_frame = (settings->video_frames) + av->video_frame_dst_size*(settings->video_frame_count);
-		uint8_t *dst_pointers[2] = {
-			dst_frame, dst_frame + plane_size
-		};
-		sws_scale(av->scaler, (const uint8_t *const *) av->frame->data, av->frame->linesize, 0, av->frame->height, dst_pointers, dst_strides);
-
-		settings->video_frame_count += 1;
-	}
+	decoder->audio_samples = realloc(
+		decoder->audio_samples,
+		(decoder->audio_sample_count + ((frame_sample_count + 4032) * av->sample_count_mul)) * sizeof(int16_t)
+	);
+	memmove(
+		&(decoder->audio_samples[decoder->audio_sample_count]),
+		buffer,
+		sizeof(int16_t) * frame_sample_count * av->sample_count_mul
+	);
+	decoder->audio_sample_count += frame_sample_count * av->sample_count_mul;
+	free(buffer);
 }
 
-bool poll_av_data(settings_t *settings)
-{
-	av_decoder_state_t* av = &(settings->decoder_state_av);
-	AVPacket packet;
+static void poll_av_packet_video(decoder_t *decoder, AVPacket *packet) {
+	decoder_state_t *av = &(decoder->state);
 
-	if (settings->end_of_input) {
-		return false;
+	int frame_size;
+	double pts_step = (double)decoder->video_fps_den / (double)decoder->video_fps_num;
+
+	int plane_size = decoder->video_width * decoder->video_height;
+	int dst_strides[2] = {
+		decoder->video_width, decoder->video_width
+	};
+
+	if (!decode_frame(av->video_codec_context, av->frame, &frame_size, packet))
+		return;
+	if (!av->frame->width || !av->frame->height || !av->frame->data[0])
+		return;
+
+	// Some files seem to have timestamps starting from a negative value
+	// (but otherwise valid) for whatever reason.
+	double pts =
+		((double)av->frame->pts * (double)av->video_stream->time_base.num)
+		/ av->video_stream->time_base.den;
+#if 0
+	if (pts < 0.0)
+		return;
+#endif
+	if (decoder->video_frame_count >= 1 && pts < av->video_next_pts)
+		return;
+	if (decoder->video_frame_count < 1)
+		av->video_next_pts = pts;
+	else
+		av->video_next_pts += pts_step;
+
+	//fprintf(stderr, "%d %f %f %f\n", decoder->video_frame_count, pts, av->video_next_pts, pts_step);
+
+	// Insert duplicate frames if the frame rate of the input stream is
+	// lower than the target frame rate.
+	int dupe_frames = (int) ceil((pts - av->video_next_pts) / pts_step);
+	if (dupe_frames < 0) dupe_frames = 0;
+	decoder->video_frames = realloc(
+		decoder->video_frames,
+		(decoder->video_frame_count + dupe_frames + 1) * av->video_frame_dst_size
+	);
+
+	for (; dupe_frames; dupe_frames--) {
+		memcpy(
+			(decoder->video_frames) + av->video_frame_dst_size * decoder->video_frame_count,
+			(decoder->video_frames) + av->video_frame_dst_size * (decoder->video_frame_count - 1),
+			av->video_frame_dst_size
+		);
+		decoder->video_frame_count += 1;
+		av->video_next_pts += pts_step;
 	}
 
+	uint8_t *dst_frame = decoder->video_frames + av->video_frame_dst_size * decoder->video_frame_count;
+	uint8_t *dst_pointers[2] = {
+		dst_frame, dst_frame + plane_size
+	};
+	sws_scale(
+		av->scaler,
+		(const uint8_t *const *) av->frame->data,
+		av->frame->linesize,
+		0,
+		av->frame->height,
+		dst_pointers,
+		dst_strides
+	);
+
+	decoder->video_frame_count += 1;
+}
+
+bool poll_av_data(decoder_t *decoder) {
+	decoder_state_t *av = &(decoder->state);
+
+	if (decoder->end_of_input)
+		return false;
+
+	AVPacket packet;
+
 	if (av_read_frame(av->format, &packet) >= 0) {
-		if (packet.stream_index == av->audio_stream_index) {
-			poll_av_packet_audio(settings, &packet);
-		} else if (packet.stream_index == av->video_stream_index) {
-			poll_av_packet_video(settings, &packet);
-		}
+		if (packet.stream_index == av->audio_stream_index)
+			poll_av_packet_audio(decoder, &packet);
+		else if (packet.stream_index == av->video_stream_index)
+			poll_av_packet_video(decoder, &packet);
+
 		av_packet_unref(&packet);
 		return true;
 	} else {
 		// out is always padded out with 4032 "0" samples, this makes calculations elsewhere easier
-		if (av->audio_stream) {
-			memset((settings->audio_samples) + (settings->audio_sample_count), 0, 4032 * av->sample_count_mul * sizeof(int16_t));
-		}
+		if (av->audio_stream)
+			memset(
+				decoder->audio_samples + decoder->audio_sample_count,
+				0,
+				4032 * av->sample_count_mul * sizeof(int16_t)
+			);
 
-		settings->end_of_input = true;
+		decoder->end_of_input = true;
 		return false;
 	}
 }
 
-bool ensure_av_data(settings_t *settings, int needed_audio_samples, int needed_video_frames)
-{
-	// HACK: in order to update settings->end_of_input as soon as all data has
+bool ensure_av_data(decoder_t *decoder, int needed_audio_samples, int needed_video_frames) {
+	// HACK: in order to update decoder->end_of_input as soon as all data has
 	// been read from the input file, this loop waits for more data than
 	// strictly needed.
-	//while (settings->audio_sample_count < needed_audio_samples || settings->video_frame_count < needed_video_frames) {
+#if 0
+	while (decoder->audio_sample_count < needed_audio_samples || decoder->video_frame_count < needed_video_frames) {
+#else
 	while (
-		(needed_audio_samples && settings->audio_sample_count <= needed_audio_samples) ||
-		(needed_video_frames && settings->video_frame_count <= needed_video_frames)
+		(needed_audio_samples && decoder->audio_sample_count <= needed_audio_samples) ||
+		(needed_video_frames && decoder->video_frame_count <= needed_video_frames)
 	) {
-		//fprintf(stderr, "ensure %d -> %d, %d -> %d\n", settings->audio_sample_count, needed_audio_samples, settings->video_frame_count, needed_video_frames);
-		if (!poll_av_data(settings)) {
+#endif
+		//fprintf(stderr, "ensure %d -> %d, %d -> %d\n", decoder->audio_sample_count, needed_audio_samples, decoder->video_frame_count, needed_video_frames);
+		if (!poll_av_data(decoder)) {
 			// Keep returning true even if the end of the input file has been
 			// reached, if the buffer is not yet completely empty.
-			return (settings->audio_sample_count || !needed_audio_samples)
-				&& (settings->video_frame_count || !needed_video_frames);
+			return
+				(decoder->audio_sample_count || !needed_audio_samples) &&
+				(decoder->video_frame_count || !needed_video_frames);
 		}
 	}
-	//fprintf(stderr, "ensure %d -> %d, %d -> %d\n", settings->audio_sample_count, needed_audio_samples, settings->video_frame_count, needed_video_frames);
+	//fprintf(stderr, "ensure %d -> %d, %d -> %d\n", decoder->audio_sample_count, needed_audio_samples, decoder->video_frame_count, needed_video_frames);
 
 	return true;
 }
 
-void retire_av_data(settings_t *settings, int retired_audio_samples, int retired_video_frames)
-{
-	av_decoder_state_t* av = &(settings->decoder_state_av);
-
-	//fprintf(stderr, "retire %d -> %d, %d -> %d\n", settings->audio_sample_count, retired_audio_samples, settings->video_frame_count, retired_video_frames);
-	assert(retired_audio_samples <= settings->audio_sample_count);
-	assert(retired_video_frames <= settings->video_frame_count);
+void retire_av_data(decoder_t *decoder, int retired_audio_samples, int retired_video_frames) {
+	//fprintf(stderr, "retire %d -> %d, %d -> %d\n", decoder->audio_sample_count, retired_audio_samples, decoder->video_frame_count, retired_video_frames);
+	assert(retired_audio_samples <= decoder->audio_sample_count);
+	assert(retired_video_frames <= decoder->video_frame_count);
 
 	int sample_size = sizeof(int16_t);
-	if (settings->audio_sample_count > retired_audio_samples) {
-		memmove(settings->audio_samples, settings->audio_samples + retired_audio_samples, (settings->audio_sample_count - retired_audio_samples)*sample_size);
-	}
-	settings->audio_sample_count -= retired_audio_samples;
+	int frame_size = decoder->state.video_frame_dst_size;
 
-	int frame_size = av->video_frame_dst_size;
-	if (settings->video_frame_count > retired_video_frames) {
-		memmove(settings->video_frames, settings->video_frames + retired_video_frames*frame_size, (settings->video_frame_count - retired_video_frames)*frame_size);
-	}
-	settings->video_frame_count -= retired_video_frames;
+	if (decoder->audio_sample_count > retired_audio_samples)
+		memmove(
+			decoder->audio_samples,
+			decoder->audio_samples + retired_audio_samples,
+			(decoder->audio_sample_count - retired_audio_samples) * sample_size
+		);
+	if (decoder->video_frame_count > retired_video_frames)
+		memmove(
+			decoder->video_frames,
+			decoder->video_frames + retired_video_frames * frame_size,
+			(decoder->video_frame_count - retired_video_frames) * frame_size
+		);
+
+	decoder->audio_sample_count -= retired_audio_samples;
+	decoder->video_frame_count -= retired_video_frames;
 }
 
-void close_av_data(settings_t *settings)
-{
-	av_decoder_state_t* av = &(settings->decoder_state_av);
+void close_av_data(decoder_t *decoder) {
+	decoder_state_t *av = &(decoder->state);
 
 	av_frame_free(&(av->frame));
 	swr_free(&(av->resampler));
+	// Deprecated, kept for compatibility with older FFmpeg versions.
 	avcodec_close(av->audio_codec_context);
 	avcodec_free_context(&(av->audio_codec_context));
 	avformat_free_context(av->format);
 
-	if(settings->audio_samples != NULL) {
-		free(settings->audio_samples);
-		settings->audio_samples = NULL;
+	if(decoder->audio_samples != NULL) {
+		free(decoder->audio_samples);
+		decoder->audio_samples = NULL;
 	}
-	if(settings->video_frames != NULL) {
-		free(settings->video_frames);
-		settings->video_frames = NULL;
+	if(decoder->video_frames != NULL) {
+		free(decoder->video_frames);
+		decoder->video_frames = NULL;
 	}
 }

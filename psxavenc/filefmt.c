@@ -3,7 +3,7 @@ psxavenc: MDEC video + SPU/XA-ADPCM audio encoder frontend
 
 Copyright (c) 2019, 2020 Adrian "asie" Siekierka
 Copyright (c) 2019 Ben "GreaseMonkey" Russell
-Copyright (c) 2023 spicyjpeg
+Copyright (c) 2023, 2025 spicyjpeg
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -22,48 +22,87 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 */
 
-#include "common.h"
-#include "libpsxav.h"
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <libpsxav.h>
+#include "args.h"
+#include "decoding.h"
+#include "mdec.h"
 
-static time_t get_elapsed_time(settings_t *settings) {
-	if (!settings->show_progress) {
-		return 0;
+static time_t start_time = 0;
+static time_t last_progress_update = 0;
+
+static time_t get_elapsed_time(void) {
+	time_t t;
+
+	if (start_time > 0) {
+		t = time(NULL) - start_time;
+	} else {
+		t = 0;
+		start_time = time(NULL);
 	}
-	time_t t = time(NULL) - settings->start_time;
-	if (t <= settings->last_progress_update) {
+
+	if (t <= last_progress_update)
 		return 0;
-	}
-	settings->last_progress_update = t;
+
+	last_progress_update = t;
 	return t;
 }
 
-static psx_audio_xa_settings_t settings_to_libpsxav_xa_audio(settings_t *settings) {
-	psx_audio_xa_settings_t new_settings;
-	new_settings.bits_per_sample = settings->bits_per_sample;
-	new_settings.frequency = settings->frequency;
-	new_settings.stereo = settings->channels == 2;
-	new_settings.file_number = settings->file_number;
-	new_settings.channel_number = settings->channel_number;
+static psx_audio_xa_settings_t args_to_libpsxav_xa_audio(const args_t *args) {
+	psx_audio_xa_settings_t settings;
 
-	switch (settings->format) {
-		case FORMAT_XA:
-		case FORMAT_STR2:
-			new_settings.format = PSX_AUDIO_XA_FORMAT_XA;
-			break;
-		default:
-			new_settings.format = PSX_AUDIO_XA_FORMAT_XACD;
-			break;
-	}
+	settings.bits_per_sample = args->audio_bit_depth;
+	settings.frequency = args->audio_frequency;
+	settings.stereo = (args->audio_channels == 2);
+	settings.file_number = args->audio_xa_file;
+	settings.channel_number = args->audio_xa_channel;
 
-	return new_settings;
+	if (args->format == FORMAT_XACD || args->format == FORMAT_STRCD)
+		settings.format = PSX_AUDIO_XA_FORMAT_XACD;
+	else
+		settings.format = PSX_AUDIO_XA_FORMAT_XA;
+
+	return settings;
 };
 
-void write_vag_header(int size_per_channel, uint8_t *header, settings_t *settings) {
+static void init_sector_buffer_video(const args_t *args, uint8_t *sector, int lba) {
+	psx_cdrom_sector_xa_subheader_t *subheader = NULL;
+
+	if (args->format == FORMAT_STRCD) {
+		psx_cdrom_init_sector((psx_cdrom_sector_t *)sector, lba, PSX_CDROM_SECTOR_TYPE_MODE2_FORM1);
+		subheader = ((psx_cdrom_sector_t *)sector)->mode2.subheader;
+	} else if (args->format == FORMAT_STR) {
+		subheader = (psx_cdrom_sector_xa_subheader_t *)sector;
+	}
+
+	if (subheader != NULL) {
+		subheader->file = args->audio_xa_file;
+		subheader->channel = args->audio_xa_channel & PSX_CDROM_SECTOR_XA_CHANNEL_MASK;
+		subheader->submode = PSX_CDROM_SECTOR_XA_SUBMODE_DATA | PSX_CDROM_SECTOR_XA_SUBMODE_RT;
+		subheader->coding = 0;
+
+		memcpy(subheader + 1, subheader, sizeof(psx_cdrom_sector_xa_subheader_t));
+	}
+}
+
+#define VAG_HEADER_SIZE 0x30
+
+static void write_vag_header(const args_t *args, int size_per_channel, uint8_t *header) {
+	memset(header, 0, VAG_HEADER_SIZE);
+
 	// Magic
 	header[0x00] = 'V';
 	header[0x01] = 'A';
 	header[0x02] = 'G';
-	header[0x03] = settings->interleave ? 'i' : 'p';
+
+	if (args->format == FORMAT_VAGI)
+		header[0x03] = 'i';
+	else
+	 	header[0x03] = 'p';
 
 	// Version (big-endian)
 	header[0x04] = 0x00;
@@ -72,329 +111,533 @@ void write_vag_header(int size_per_channel, uint8_t *header, settings_t *setting
 	header[0x07] = 0x20;
 
 	// Interleave (little-endian)
-	header[0x08] = (uint8_t)settings->interleave;
-	header[0x09] = (uint8_t)(settings->interleave>>8);
-	header[0x0a] = (uint8_t)(settings->interleave>>16);
-	header[0x0b] = (uint8_t)(settings->interleave>>24);
+	if (args->format == FORMAT_VAGI) {
+		header[0x08] = (uint8_t)args->audio_interleave;
+		header[0x09] = (uint8_t)(args->audio_interleave >> 8);
+		header[0x0A] = (uint8_t)(args->audio_interleave >> 16);
+		header[0x0B] = (uint8_t)(args->audio_interleave >> 24);
+	}
 
 	// Length of data for each channel (big-endian)
-	header[0x0c] = (uint8_t)(size_per_channel>>24);
-	header[0x0d] = (uint8_t)(size_per_channel>>16);
-	header[0x0e] = (uint8_t)(size_per_channel>>8);
-	header[0x0f] = (uint8_t)size_per_channel;
+	header[0x0C] = (uint8_t)(size_per_channel >> 24);
+	header[0x0D] = (uint8_t)(size_per_channel >> 16);
+	header[0x0E] = (uint8_t)(size_per_channel >> 8);
+	header[0x0F] = (uint8_t)size_per_channel;
 
 	// Sample rate (big-endian)
-	header[0x10] = (uint8_t)(settings->frequency>>24);
-	header[0x11] = (uint8_t)(settings->frequency>>16);
-	header[0x12] = (uint8_t)(settings->frequency>>8);
-	header[0x13] = (uint8_t)settings->frequency;
+	header[0x10] = (uint8_t)(args->audio_frequency >> 24);
+	header[0x11] = (uint8_t)(args->audio_frequency >> 16);
+	header[0x12] = (uint8_t)(args->audio_frequency >> 8);
+	header[0x13] = (uint8_t)args->audio_frequency;
 
 	// Number of channels (little-endian)
-	header[0x1e] = (uint8_t)settings->channels;
-	header[0x1f] = 0x00;
+	header[0x1E] = (uint8_t)args->audio_channels;
+	header[0x1F] = 0x00;
 
 	// Filename
-	//strncpy(header + 0x20, "psxavenc", 16);
-	memset(header + 0x20, 0, 16);
+	int name_offset = strlen(args->output_file);
+	while (
+		name_offset > 0 &&
+		args->output_file[name_offset - 1] != '/' &&
+		args->output_file[name_offset - 1] != '\\'
+	)
+		name_offset--;
+
+	strncpy((char*)(header + 0x20), &args->output_file[name_offset], 16);
 }
 
-void encode_file_spu(settings_t *settings, FILE *output) {
-	psx_audio_encoder_channel_state_t audio_state;	
-	int audio_samples_per_block = psx_audio_spu_get_samples_per_block();
-	int block_size = psx_audio_spu_get_buffer_size_per_block();
-	uint8_t buffer[16];
-	int block_count;
+// The functions below are some peak spaghetti code I would rewrite if that
+// didn't also require scrapping the rest of the codebase. -- spicyjpeg
 
+void encode_file_xa(const args_t *args, decoder_t *decoder, FILE *output) {
+	psx_audio_xa_settings_t xa_settings = args_to_libpsxav_xa_audio(args);
+
+	int audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
+
+	psx_audio_encoder_state_t audio_state;
+	memset(&audio_state, 0, sizeof(psx_audio_encoder_state_t));
+
+	int sector_count = 0;
+
+	for (; ensure_av_data(decoder, audio_samples_per_sector * args->audio_channels, 0); sector_count++) {
+		int samples_length = decoder->audio_sample_count / args->audio_channels;
+
+		if (samples_length > audio_samples_per_sector)
+			samples_length = audio_samples_per_sector;
+
+		uint8_t sector[PSX_CDROM_SECTOR_SIZE];
+		int length = psx_audio_xa_encode(
+			xa_settings,
+			&audio_state,
+			decoder->audio_samples,
+			samples_length,
+			sector_count,
+			sector
+		);
+
+		if (decoder->end_of_input)
+			psx_audio_xa_encode_finalize(xa_settings, sector, length);
+
+		retire_av_data(decoder, samples_length * args->audio_channels, 0);
+		fwrite(sector, length, 1, output);
+
+		time_t t = get_elapsed_time();
+
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rLBA: %6d | Encoding speed: %5.2fx",
+				sector_count,
+				(double)(sector_count * audio_samples_per_sector) / (double)(args->audio_frequency * t)
+			);
+		}
+	}
+}
+
+void encode_file_spu(const args_t *args, decoder_t *decoder, FILE *output) {
+	psx_audio_encoder_channel_state_t audio_state;
 	memset(&audio_state, 0, sizeof(psx_audio_encoder_channel_state_t));
 
 	// The header must be written after the data as we don't yet know the
 	// number of audio samples.
-	if (settings->format == FORMAT_VAG) {
-		fseek(output, 48, SEEK_SET);
+	if (args->format == FORMAT_VAG)
+		fseek(output, VAG_HEADER_SIZE, SEEK_SET);
+
+	uint8_t block[PSX_AUDIO_SPU_BLOCK_SIZE];
+	int block_count = 0;
+
+	if (!(args->flags & FLAG_SPU_NO_LEADING_DUMMY)) {
+		// Insert leading silent block
+		memset(block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+
+		fwrite(block, PSX_AUDIO_SPU_BLOCK_SIZE, 1, output);
+		block_count++;
 	}
 
-	for (block_count = 0; ensure_av_data(settings, audio_samples_per_block, 0); block_count++) {
-		int samples_length = settings->audio_sample_count;
-		if (samples_length > audio_samples_per_block) samples_length = audio_samples_per_block;
+	int loop_start_block = -1;
 
-		int length = psx_audio_spu_encode(&audio_state, settings->audio_samples, samples_length, 1, buffer);
-		if (!block_count) {
-			// This flag is not required as the SPU already resets the loop
-			// address when starting playback of a sample.
-			//buffer[1] |= PSX_AUDIO_SPU_LOOP_START;
-		}
-		if (settings->end_of_input) {
-			buffer[1] |= settings->loop ? PSX_AUDIO_SPU_LOOP_REPEAT : PSX_AUDIO_SPU_LOOP_END;
-		}
+	if (args->audio_loop_point >= 0)
+		loop_start_block = block_count + (args->audio_loop_point * args->audio_frequency) / (PSX_AUDIO_SPU_SAMPLES_PER_BLOCK * 1000);
 
-		retire_av_data(settings, samples_length, 0);
-		fwrite(buffer, length, 1, output);
+	for (; ensure_av_data(decoder, PSX_AUDIO_SPU_SAMPLES_PER_BLOCK, 0); block_count++) {
+		int samples_length = decoder->audio_sample_count;
 
-		time_t t = get_elapsed_time(settings);
-		if (t) {
-			fprintf(stderr, "\rBlock: %6d | Encoding speed: %5.2fx",
+		if (samples_length > PSX_AUDIO_SPU_SAMPLES_PER_BLOCK)
+			samples_length = PSX_AUDIO_SPU_SAMPLES_PER_BLOCK;
+
+		int length = psx_audio_spu_encode(
+			&audio_state,
+			decoder->audio_samples,
+			samples_length,
+			1,
+			block
+		);
+
+		if (block_count == loop_start_block)
+			block[1] |= PSX_AUDIO_SPU_LOOP_START;
+		if ((args->flags & FLAG_SPU_LOOP_END) && decoder->end_of_input)
+			block[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
+
+		retire_av_data(decoder, samples_length, 0);
+		fwrite(block, length, 1, output);
+
+		time_t t = get_elapsed_time();
+
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rBlock: %6d | Encoding speed: %5.2fx",
 				block_count,
-				(double)(block_count*audio_samples_per_block) / (double)(settings->frequency*t)
+				(double)(block_count * PSX_AUDIO_SPU_SAMPLES_PER_BLOCK) / (double)(args->audio_frequency * t)
 			);
 		}
 	}
 
-	int padding_size = (block_count*block_size) % settings->alignment;
-	if (padding_size) {
-		padding_size = settings->alignment - padding_size;
-		uint8_t *padding = malloc(padding_size);
-		memset(padding, 0, padding_size);
-		fwrite(padding, padding_size, 1, output);
-		free(padding);
+	if (!(args->flags & FLAG_SPU_LOOP_END)) {
+		// Insert trailing looping block
+		memset(block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+		block[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+
+		fwrite(block, PSX_AUDIO_SPU_BLOCK_SIZE, 1, output);
+		block_count++;
 	}
 
-	if (settings->format == FORMAT_VAG) {
-		uint8_t header[48];
-		memset(header, 0, 48);
-		write_vag_header(block_count*block_size, header, settings);
+	int overflow = (block_count * PSX_AUDIO_SPU_BLOCK_SIZE) % args->alignment;
+
+	if (overflow) {
+		for (int i = 0; i < (args->alignment - overflow); i++)
+			fputc(0, output);
+	}
+	if (args->format == FORMAT_VAG) {
+		uint8_t header[VAG_HEADER_SIZE];
+		write_vag_header(args, block_count * PSX_AUDIO_SPU_BLOCK_SIZE, header);
+
 		fseek(output, 0, SEEK_SET);
-		fwrite(header, 48, 1, output);
+		fwrite(header, VAG_HEADER_SIZE, 1, output);
 	}
 }
 
-void encode_file_spu_interleaved(settings_t *settings, FILE *output) {
-	int audio_state_size = sizeof(psx_audio_encoder_channel_state_t) * settings->channels;
+void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output) {
+	int audio_samples_per_chunk = args->audio_interleave / PSX_AUDIO_SPU_BLOCK_SIZE * PSX_AUDIO_SPU_SAMPLES_PER_BLOCK;
 
 	// NOTE: since the interleaved .vag format is not standardized, some tools
 	// (such as vgmstream) will not properly play files with interleave < 2048,
 	// alignment != 2048 or channels != 2.
-	int buffer_size = settings->interleave + settings->alignment - 1;
-	buffer_size -= buffer_size % settings->alignment;
-	int header_size = 48 + settings->alignment - 1;
-	header_size -= header_size % settings->alignment;
+	int chunk_size = args->audio_interleave * args->audio_channels + args->alignment - 1;
+	chunk_size -= chunk_size % args->alignment;
 
+	int header_size = VAG_HEADER_SIZE + args->alignment - 1;
+	header_size -= header_size % args->alignment;
+
+	if (args->format == FORMAT_VAGI)
+		fseek(output, header_size, SEEK_SET);
+
+	int audio_state_size = sizeof(psx_audio_encoder_channel_state_t) * args->audio_channels;
 	psx_audio_encoder_channel_state_t *audio_state = malloc(audio_state_size);
-	uint8_t *buffer = malloc(buffer_size);
-	int audio_samples_per_block = psx_audio_spu_get_samples_per_block();
-	int block_size = psx_audio_spu_get_buffer_size_per_block();
-	int audio_samples_per_chunk = settings->interleave / block_size * audio_samples_per_block;
-	int chunk_count;
-
 	memset(audio_state, 0, audio_state_size);
 
-	if (settings->format == FORMAT_VAGI) {
-		fseek(output, header_size, SEEK_SET);
-	}
+	uint8_t *chunk = malloc(chunk_size);
+	int chunk_count = 0;
 
-	for (chunk_count = 0; ensure_av_data(settings, audio_samples_per_chunk*settings->channels, 0); chunk_count++) {
-		int samples_length = settings->audio_sample_count / settings->channels;
-		if (samples_length > audio_samples_per_chunk) samples_length = audio_samples_per_chunk;
+	for (; ensure_av_data(decoder, audio_samples_per_chunk * args->audio_channels, 0); chunk_count++) {
+		int samples_length = decoder->audio_sample_count / args->audio_channels;
 
-		for (int ch = 0; ch < settings->channels; ch++) {
-			memset(buffer, 0, buffer_size);
-			int length = psx_audio_spu_encode(audio_state + ch, settings->audio_samples + ch, samples_length, settings->channels, buffer);
-			if (length) {
-				//buffer[1] |= PSX_AUDIO_SPU_LOOP_START;
-				if (settings->loop) {
-					buffer[length - block_size + 1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
+		if (samples_length > audio_samples_per_chunk)
+			samples_length = audio_samples_per_chunk;
+
+		memset(chunk, 0, chunk_size);
+		uint8_t *chunk_ptr = chunk;
+
+		// Insert leading silent block
+		if (chunk_count == 0 && !(args->flags & FLAG_SPU_NO_LEADING_DUMMY)) {
+			chunk_ptr += PSX_AUDIO_SPU_BLOCK_SIZE;
+			samples_length -= PSX_AUDIO_SPU_SAMPLES_PER_BLOCK;
+		}
+
+		for (int ch = 0; ch < args->audio_channels; ch++, chunk_ptr += args->audio_interleave) {
+			int length = psx_audio_spu_encode(
+				audio_state + ch,
+				decoder->audio_samples + ch,
+				samples_length,
+				args->audio_channels,
+				chunk_ptr
+			);
+
+			if (length > 0) {
+				uint8_t *last_block = chunk_ptr + length - PSX_AUDIO_SPU_BLOCK_SIZE;
+
+				if (args->flags & FLAG_SPU_LOOP_END) {
+					last_block[1] = PSX_AUDIO_SPU_LOOP_REPEAT;
+				} else if (decoder->end_of_input) {
+					// HACK: the trailing block should in theory be appended to
+					// the existing data, but it's easier to just zerofill and
+					// repurpose the last encoded block
+					memset(last_block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
+					last_block[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
 				}
-				if (settings->end_of_input) {
-					buffer[length - block_size + 1] |= PSX_AUDIO_SPU_LOOP_END;
-				}
-			}
-
-			fwrite(buffer, buffer_size, 1, output);
-
-			time_t t = get_elapsed_time(settings);
-			if (t) {
-				fprintf(stderr, "\rChunk: %6d | Encoding speed: %5.2fx",
-					chunk_count,
-					(double)(chunk_count*audio_samples_per_chunk) / (double)(settings->frequency*t)
-				);
 			}
 		}
 
-		retire_av_data(settings, samples_length*settings->channels, 0);
+		retire_av_data(decoder, samples_length * args->audio_channels, 0);
+		fwrite(chunk, chunk_size, 1, output);
+
+		time_t t = get_elapsed_time();
+
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rChunk: %6d | Encoding speed: %5.2fx",
+				chunk_count,
+				(double)(chunk_count * audio_samples_per_chunk) / (double)(args->audio_frequency * t)
+			);
+		}
+
 	}
 
-	if (settings->format == FORMAT_VAGI) {
+	free(audio_state);
+	free(chunk);
+
+	if (args->format == FORMAT_VAGI) {
 		uint8_t *header = malloc(header_size);
 		memset(header, 0, header_size);
-		write_vag_header(chunk_count*settings->interleave, header, settings);
+		write_vag_header(args, chunk_count * args->audio_interleave, header);
+
 		fseek(output, 0, SEEK_SET);
 		fwrite(header, header_size, 1, output);
 		free(header);
 	}
-
-	free(audio_state);
-	free(buffer);
 }
 
-void encode_file_xa(settings_t *settings, FILE *output) {
-	psx_audio_xa_settings_t xa_settings = settings_to_libpsxav_xa_audio(settings);
-	psx_audio_encoder_state_t audio_state;	
-	int audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
-	uint8_t buffer[PSX_CDROM_SECTOR_SIZE];
-
-	memset(&audio_state, 0, sizeof(psx_audio_encoder_state_t));
-
-	for (int j = 0; ensure_av_data(settings, audio_samples_per_sector*settings->channels, 0); j++) {
-		int samples_length = settings->audio_sample_count / settings->channels;
-		if (samples_length > audio_samples_per_sector) samples_length = audio_samples_per_sector;
-		int length = psx_audio_xa_encode(xa_settings, &audio_state, settings->audio_samples, samples_length, buffer);
-		if (settings->end_of_input) {
-			psx_audio_xa_encode_finalize(xa_settings, buffer, length);
-		}
-
-		if (settings->format == FORMAT_XACD) {
-			int t = j + 75*2;
-
-			// Put the time in
-			buffer[0x00C] = ((t/75/60)%10)|(((t/75/60)/10)<<4);
-			buffer[0x00D] = (((t/75)%60)%10)|((((t/75)%60)/10)<<4);
-			buffer[0x00E] = ((t%75)%10)|(((t%75)/10)<<4);
-		}
-
-		retire_av_data(settings, samples_length*settings->channels, 0);
-		fwrite(buffer, length, 1, output);
-
-		time_t t = get_elapsed_time(settings);
-		if (t) {
-			fprintf(stderr, "\rLBA: %6d | Encoding speed: %5.2fx",
-				j,
-				(double)(j*audio_samples_per_sector) / (double)(settings->frequency*t)
-			);
-		}
-	}
-}
-
-void encode_file_str(settings_t *settings, FILE *output) {
-	psx_audio_xa_settings_t xa_settings = settings_to_libpsxav_xa_audio(settings);
-	psx_audio_encoder_state_t audio_state;
-	int audio_samples_per_sector;
-	uint8_t buffer[PSX_CDROM_SECTOR_SIZE];
-
-	int offset, sector_size;
-	if (settings->format == FORMAT_STR2V) {
-		sector_size = 2048;
-		offset = 0x18;
-	} else {
-		sector_size = psx_audio_xa_get_buffer_size_per_sector(xa_settings);
-		offset = PSX_CDROM_SECTOR_SIZE - sector_size;
-	}
+void encode_file_str(const args_t *args, decoder_t *decoder, FILE *output) {
+	psx_audio_xa_settings_t xa_settings = args_to_libpsxav_xa_audio(args);
+	int sector_size = psx_audio_xa_get_buffer_size_per_sector(xa_settings);
 
 	int interleave;
+	int audio_samples_per_sector;
 	int video_sectors_per_block;
-	if (settings->decoder_state_av.audio_stream) {
+
+	if (decoder->state.audio_stream != NULL) {
 		// 1/N audio, (N-1)/N video
+		interleave = psx_audio_xa_get_sector_interleave(xa_settings) * args->str_cd_speed;
 		audio_samples_per_sector = psx_audio_xa_get_samples_per_sector(xa_settings);
-		interleave = psx_audio_xa_get_sector_interleave(xa_settings) * settings->cd_speed;
 		video_sectors_per_block = interleave - 1;
 
-		if (!settings->quiet) {
-			fprintf(stderr, "Interleave: %d/%d audio, %d/%d video\n",
-				interleave - video_sectors_per_block, interleave, video_sectors_per_block, interleave);
-		}
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(
+				stderr,
+				"Interleave: %d/%d audio, %d/%d video\n",
+				interleave - video_sectors_per_block,
+				interleave,
+				video_sectors_per_block,
+				interleave
+			);
 	} else {
 		// 0/1 audio, 1/1 video
-		audio_samples_per_sector = 0;
 		interleave = 1;
+		audio_samples_per_sector = 0;
 		video_sectors_per_block = 1;
 	}
 
+	psx_audio_encoder_state_t audio_state;
 	memset(&audio_state, 0, sizeof(psx_audio_encoder_state_t));
 
-	// e.g. 15fps = (150*7/8/15) = 8.75 blocks per frame
-	settings->state_vid.frame_block_base_overflow = (75*settings->cd_speed) * video_sectors_per_block * settings->video_fps_den;
-	settings->state_vid.frame_block_overflow_den = interleave * settings->video_fps_num;
-	double frame_size = (double)settings->state_vid.frame_block_base_overflow / (double)settings->state_vid.frame_block_overflow_den;
-	if (!settings->quiet) {
-		fprintf(stderr, "Frame size: %.2f sectors\n", frame_size);
-	}
+	mdec_encoder_t encoder;
+	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
 
-	init_encoder_state(settings);
-	settings->state_vid.frame_output = malloc(2016 * (int)ceil(frame_size));
-	settings->state_vid.frame_index = 0;
-	settings->state_vid.frame_data_offset = 0;
-	settings->state_vid.frame_max_size = 0;
-	settings->state_vid.frame_block_overflow_num = 0;
-	settings->state_vid.quant_scale_sum = 0;
+	// e.g. 15fps = (150*7/8/15) = 8.75 blocks per frame
+	encoder.state.frame_block_base_overflow = (75 * args->str_cd_speed) * video_sectors_per_block * args->str_fps_den;
+	encoder.state.frame_block_overflow_den = interleave * args->str_fps_num;
+	double frame_size = (double)encoder.state.frame_block_base_overflow / (double)encoder.state.frame_block_overflow_den;
+
+	if (!(args->flags & FLAG_QUIET))
+		fprintf(stderr, "Frame size: %.2f sectors\n", frame_size);
+
+	encoder.state.frame_output = malloc(2016 * (int)ceil(frame_size));
+	encoder.state.frame_index = 0;
+	encoder.state.frame_data_offset = 0;
+	encoder.state.frame_max_size = 0;
+	encoder.state.frame_block_overflow_num = 0;
+	encoder.state.quant_scale_sum = 0;
 
 	// FIXME: this needs an extra frame to prevent A/V desync
 	int frames_needed = (int) ceil((double)video_sectors_per_block / frame_size);
-	if (frames_needed < 2) frames_needed = 2;
 
-	for (int j = 0; !settings->end_of_input || settings->state_vid.frame_data_offset < settings->state_vid.frame_max_size; j++) {
-		ensure_av_data(settings, audio_samples_per_sector*settings->channels, frames_needed);
+	if (frames_needed < 2)
+		frames_needed = 2;
 
-		if ((j%interleave) < video_sectors_per_block) {
-			// Video sector
-			init_sector_buffer_video((psx_cdrom_sector_mode2_t*) buffer, settings);
-			encode_sector_str(settings->video_frames, buffer, settings);
+	int sector_count = 0;
+
+	for (; !decoder->end_of_input || encoder.state.frame_data_offset < encoder.state.frame_max_size; sector_count++) {
+		ensure_av_data(decoder, audio_samples_per_sector * args->audio_channels, frames_needed);
+
+		uint8_t sector[PSX_CDROM_SECTOR_SIZE];
+		bool is_video_sector;
+
+		if (audio_samples_per_sector == 0)
+			is_video_sector = true;
+		else if (args->flags & FLAG_STR_TRAILING_AUDIO)
+			is_video_sector = (sector_count % interleave) < video_sectors_per_block;
+		else
+			is_video_sector = (sector_count % interleave) > 0;
+
+		if (is_video_sector) {
+			init_sector_buffer_video(args, sector, sector_count);
+
+			int frames_used = encode_sector_str(
+				&encoder,
+				args->format,
+				args->str_video_id,
+				decoder->video_frames,
+				sector
+			);
+
+			psx_cdrom_calculate_checksums((psx_cdrom_sector_t *)sector, PSX_CDROM_SECTOR_TYPE_MODE2_FORM1);
+			retire_av_data(decoder, 0, frames_used);
 		} else {
-			// Audio sector
-			int samples_length = settings->audio_sample_count / settings->channels;
-			if (samples_length > audio_samples_per_sector) samples_length = audio_samples_per_sector;
+			int samples_length = decoder->audio_sample_count / args->audio_channels;
+
+			if (samples_length > audio_samples_per_sector)
+				samples_length = audio_samples_per_sector;
 
 			// FIXME: this is an extremely hacky way to handle audio tracks
 			// shorter than the video track
-			if (!samples_length) {
+			if (!samples_length)
 				video_sectors_per_block++;
-			}
 
-			int length = psx_audio_xa_encode(xa_settings, &audio_state, settings->audio_samples, samples_length, buffer);
-			if (settings->end_of_input) {
-				psx_audio_xa_encode_finalize(xa_settings, buffer, length);
-			}
-			retire_av_data(settings, samples_length*settings->channels, 0);
+			int length = psx_audio_xa_encode(
+				xa_settings,
+				&audio_state,
+				decoder->audio_samples,
+				samples_length,
+				sector_count,
+				sector
+			);
+
+			if (decoder->end_of_input)
+				psx_audio_xa_encode_finalize(xa_settings, sector, length);
+
+			retire_av_data(decoder, samples_length * args->audio_channels, 0);
 		}
 
-		if (settings->format == FORMAT_STR2CD) {
-			int t = j + 75*2;
+		fwrite(sector, sector_size, 1, output);
 
-			// Put the time in
-			buffer[0x00C] = ((t/75/60)%10)|(((t/75/60)/10)<<4);
-			buffer[0x00D] = (((t/75)%60)%10)|((((t/75)%60)/10)<<4);
-			buffer[0x00E] = ((t%75)%10)|(((t%75)/10)<<4);
-		}
+		time_t t = get_elapsed_time();
 
-		if((j%interleave) < video_sectors_per_block) {
-			calculate_edc_data(buffer);
-		}
-
-		fwrite(buffer + offset, sector_size, 1, output);
-
-		time_t t = get_elapsed_time(settings);
-		if (t) {
-			fprintf(stderr, "\rFrame: %4d | LBA: %6d | Avg. q. scale: %5.2f | Encoding speed: %5.2fx",
-				settings->state_vid.frame_index,
-				j,
-				(double)settings->state_vid.quant_scale_sum / (double)settings->state_vid.frame_index,
-				(double)(settings->state_vid.frame_index*settings->video_fps_den) / (double)(t*settings->video_fps_num)
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rFrame: %4d | LBA: %6d | Avg. q. scale: %5.2f | Encoding speed: %5.2fx",
+				encoder.state.frame_index,
+				sector_count,
+				(double)encoder.state.quant_scale_sum / (double)encoder.state.frame_index,
+				(double)(encoder.state.frame_index * args->str_fps_den) / (double)(t * args->str_fps_num)
 			);
 		}
 	}
 
-	free(settings->state_vid.frame_output);
-	destroy_encoder_state(settings);
+	free(encoder.state.frame_output);
+	destroy_mdec_encoder(&encoder);
 }
 
-void encode_file_sbs(settings_t *settings, FILE *output) {
-	init_encoder_state(settings);
-	settings->state_vid.frame_output = malloc(settings->alignment);
-	settings->state_vid.frame_data_offset = 0;
-	settings->state_vid.frame_max_size = settings->alignment;
-	settings->state_vid.quant_scale_sum = 0;
+void encode_file_strspu(const args_t *args, decoder_t *decoder, FILE *output) {
+	int interleave;
+	int audio_samples_per_sector;
+	int video_sectors_per_block;
 
-	for (int j = 0; ensure_av_data(settings, 0, 1); j++) {
-		encode_frame_bs(settings->video_frames, settings);
-		fwrite(settings->state_vid.frame_output, settings->alignment, 1, output);
+	if (decoder->state.audio_stream != NULL) {
+		assert(false); // TODO: implement
 
-		time_t t = get_elapsed_time(settings);
-		if (t) {
-			fprintf(stderr, "\rFrame: %4d | Avg. q. scale: %5.2f | Encoding speed: %5.2fx",
-				j,
-				(double)settings->state_vid.quant_scale_sum / (double)j,
-				(double)(j*settings->video_fps_den) / (double)(t*settings->video_fps_num)
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(
+				stderr,
+				"Interleave: %d/%d audio, %d/%d video\n",
+				interleave - video_sectors_per_block,
+				interleave,
+				video_sectors_per_block,
+				interleave
+			);
+	} else {
+		// 0/1 audio, 1/1 video
+		interleave = 1;
+		audio_samples_per_sector = 0;
+		video_sectors_per_block = 1;
+	}
+
+	mdec_encoder_t encoder;
+	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
+
+	// e.g. 15fps = (150*7/8/15) = 8.75 blocks per frame
+	encoder.state.frame_block_base_overflow = (75 * args->str_cd_speed) * video_sectors_per_block * args->str_fps_den;
+	encoder.state.frame_block_overflow_den = interleave * args->str_fps_num;
+	double frame_size = (double)encoder.state.frame_block_base_overflow / (double)encoder.state.frame_block_overflow_den;
+
+	if (!(args->flags & FLAG_QUIET))
+		fprintf(stderr, "Frame size: %.2f sectors\n", frame_size);
+
+	encoder.state.frame_output = malloc(2016 * (int)ceil(frame_size));
+	encoder.state.frame_index = 0;
+	encoder.state.frame_data_offset = 0;
+	encoder.state.frame_max_size = 0;
+	encoder.state.frame_block_overflow_num = 0;
+	encoder.state.quant_scale_sum = 0;
+
+	// FIXME: this needs an extra frame to prevent A/V desync
+	int frames_needed = (int) ceil((double)video_sectors_per_block / frame_size);
+
+	if (frames_needed < 2)
+		frames_needed = 2;
+
+	int sector_count = 0;
+
+	for (; !decoder->end_of_input || encoder.state.frame_data_offset < encoder.state.frame_max_size; sector_count++) {
+		ensure_av_data(decoder, audio_samples_per_sector * args->audio_channels, frames_needed);
+
+		uint8_t sector[2048];
+		bool is_video_sector;
+
+		if (audio_samples_per_sector == 0)
+			is_video_sector = true;
+		else if (args->flags & FLAG_STR_TRAILING_AUDIO)
+			is_video_sector = (sector_count % interleave) < video_sectors_per_block;
+		else
+			is_video_sector = (sector_count % interleave) > 0;
+
+		if (is_video_sector) {
+			init_sector_buffer_video(args, sector, sector_count);
+
+			int frames_used = encode_sector_str(
+				&encoder,
+				args->format,
+				args->str_video_id,
+				decoder->video_frames,
+				sector
+			);
+
+			retire_av_data(decoder, 0, frames_used);
+		} else {
+			int samples_length = decoder->audio_sample_count / args->audio_channels;
+
+			if (samples_length > audio_samples_per_sector)
+				samples_length = audio_samples_per_sector;
+
+			// FIXME: this is an extremely hacky way to handle audio tracks
+			// shorter than the video track
+			if (!samples_length)
+				video_sectors_per_block++;
+
+			assert(false); // TODO: implement
+
+			retire_av_data(decoder, samples_length * args->audio_channels, 0);
+		}
+
+		fwrite(sector, 2048, 1, output);
+
+		time_t t = get_elapsed_time();
+
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rFrame: %4d | LBA: %6d | Avg. q. scale: %5.2f | Encoding speed: %5.2fx",
+				encoder.state.frame_index,
+				sector_count,
+				(double)encoder.state.quant_scale_sum / (double)encoder.state.frame_index,
+				(double)(encoder.state.frame_index * args->str_fps_den) / (double)(t * args->str_fps_num)
 			);
 		}
 	}
 
-	free(settings->state_vid.frame_output);
-	destroy_encoder_state(settings);
+	free(encoder.state.frame_output);
+	destroy_mdec_encoder(&encoder);
+}
+
+void encode_file_sbs(const args_t *args, decoder_t *decoder, FILE *output) {
+	mdec_encoder_t encoder;
+	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
+
+	encoder.state.frame_output = malloc(args->alignment);
+	encoder.state.frame_data_offset = 0;
+	encoder.state.frame_max_size = args->alignment;
+	encoder.state.quant_scale_sum = 0;
+
+	for (int j = 0; ensure_av_data(decoder, 0, 1); j++) {
+		encode_frame_bs(&encoder, decoder->video_frames);
+
+		retire_av_data(decoder, 0, 1);
+		fwrite(encoder.state.frame_output, args->alignment, 1, output);
+
+		time_t t = get_elapsed_time();
+
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rFrame: %4d | Avg. q. scale: %5.2f | Encoding speed: %5.2fx",
+				j,
+				(double)encoder.state.quant_scale_sum / (double)j,
+				(double)(j * args->str_fps_den) / (double)(t * args->str_fps_num)
+			);
+		}
+	}
+
+	free(encoder.state.frame_output);
+	destroy_mdec_encoder(&encoder);
 }

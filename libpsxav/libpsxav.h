@@ -21,16 +21,20 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 */
 
-#ifndef __LIBPSXAV_H__
-#define __LIBPSXAV_H__
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
 
 // audio.c
 
-#define PSX_AUDIO_XA_FREQ_SINGLE 18900
-#define PSX_AUDIO_XA_FREQ_DOUBLE 37800
+#define PSX_AUDIO_SPU_BLOCK_SIZE        16
+#define PSX_AUDIO_SPU_SAMPLES_PER_BLOCK 28
+
+enum {
+	PSX_AUDIO_XA_FREQ_SINGLE = 18900,
+	PSX_AUDIO_XA_FREQ_DOUBLE = 37800
+};
 
 typedef enum {
 	PSX_AUDIO_XA_FORMAT_XA, // .xa file
@@ -57,23 +61,41 @@ typedef struct {
 	psx_audio_encoder_channel_state_t right;
 } psx_audio_encoder_state_t;
 
-#define PSX_AUDIO_SPU_LOOP_END 1
-#define PSX_AUDIO_SPU_LOOP_REPEAT 3
-#define PSX_AUDIO_SPU_LOOP_START 4
+enum {
+	PSX_AUDIO_SPU_LOOP_END    = 1 << 0,
+	PSX_AUDIO_SPU_LOOP_REPEAT = 3 << 0,
+	PSX_AUDIO_SPU_LOOP_START  = 1 << 2
+};
 
 uint32_t psx_audio_xa_get_buffer_size(psx_audio_xa_settings_t settings, int sample_count);
 uint32_t psx_audio_spu_get_buffer_size(int sample_count);
 uint32_t psx_audio_xa_get_buffer_size_per_sector(psx_audio_xa_settings_t settings);
-uint32_t psx_audio_spu_get_buffer_size_per_block(void);
 uint32_t psx_audio_xa_get_samples_per_sector(psx_audio_xa_settings_t settings);
-uint32_t psx_audio_spu_get_samples_per_block(void);
 uint32_t psx_audio_xa_get_sector_interleave(psx_audio_xa_settings_t settings);
-int psx_audio_xa_encode(psx_audio_xa_settings_t settings, psx_audio_encoder_state_t *state, int16_t* samples, int sample_count, uint8_t *output);
-int psx_audio_xa_encode_simple(psx_audio_xa_settings_t settings, int16_t* samples, int sample_count, uint8_t *output);
-int psx_audio_spu_encode(psx_audio_encoder_channel_state_t *state, int16_t* samples, int sample_count, int pitch, uint8_t *output);
-int psx_audio_spu_encode_simple(int16_t* samples, int sample_count, uint8_t *output, int loop_start);
+int psx_audio_xa_encode(
+	psx_audio_xa_settings_t settings,
+	psx_audio_encoder_state_t *state,
+	const int16_t *samples,
+	int sample_count,
+	int lba,
+	uint8_t *output
+);
+int psx_audio_xa_encode_simple(
+	psx_audio_xa_settings_t settings,
+	const int16_t *samples,
+	int sample_count,
+	int lba,
+	uint8_t *output
+);
+int psx_audio_spu_encode(
+	psx_audio_encoder_channel_state_t *state,
+	const int16_t *samples,
+	int sample_count,
+	int pitch,
+	uint8_t *output
+);
+int psx_audio_spu_encode_simple(const int16_t *samples, int sample_count, uint8_t *output, int loop_start);
 void psx_audio_xa_encode_finalize(psx_audio_xa_settings_t settings, uint8_t *output, int output_length);
-void psx_audio_spu_set_flag_at_sample(uint8_t* spu_data, int sample_pos, int flag);
 
 // cdrom.c
 
@@ -106,30 +128,39 @@ typedef struct {
 	uint8_t data[0x918];
 } psx_cdrom_sector_mode2_t;
 
+typedef union {
+	psx_cdrom_sector_mode1_t mode1;
+	psx_cdrom_sector_mode2_t mode2;
+} psx_cdrom_sector_t;
+
 _Static_assert(sizeof(psx_cdrom_sector_mode1_t) == PSX_CDROM_SECTOR_SIZE, "Invalid Mode1 sector size");
 _Static_assert(sizeof(psx_cdrom_sector_mode2_t) == PSX_CDROM_SECTOR_SIZE, "Invalid Mode2 sector size");
 
 #define PSX_CDROM_SECTOR_XA_CHANNEL_MASK 0x1F
 
-#define PSX_CDROM_SECTOR_XA_SUBMODE_EOR     0x01
-#define PSX_CDROM_SECTOR_XA_SUBMODE_VIDEO   0x02
-#define PSX_CDROM_SECTOR_XA_SUBMODE_AUDIO   0x04
-#define PSX_CDROM_SECTOR_XA_SUBMODE_DATA    0x08
-#define PSX_CDROM_SECTOR_XA_SUBMODE_TRIGGER 0x10
-#define PSX_CDROM_SECTOR_XA_SUBMODE_FORM2   0x20
-#define PSX_CDROM_SECTOR_XA_SUBMODE_RT      0x40
-#define PSX_CDROM_SECTOR_XA_SUBMODE_EOF     0x80
+enum {
+	PSX_CDROM_SECTOR_XA_SUBMODE_EOR     = 1 << 0,
+	PSX_CDROM_SECTOR_XA_SUBMODE_VIDEO   = 1 << 1,
+	PSX_CDROM_SECTOR_XA_SUBMODE_AUDIO   = 1 << 2,
+	PSX_CDROM_SECTOR_XA_SUBMODE_DATA    = 1 << 3,
+	PSX_CDROM_SECTOR_XA_SUBMODE_TRIGGER = 1 << 4,
+	PSX_CDROM_SECTOR_XA_SUBMODE_FORM2   = 1 << 5,
+	PSX_CDROM_SECTOR_XA_SUBMODE_RT      = 1 << 6,
+	PSX_CDROM_SECTOR_XA_SUBMODE_EOF     = 1 << 7
+};
 
-#define PSX_CDROM_SECTOR_XA_CODING_MONO         0x00
-#define PSX_CDROM_SECTOR_XA_CODING_STEREO       0x01
-#define PSX_CDROM_SECTOR_XA_CODING_CHANNEL_MASK 0x03
-#define PSX_CDROM_SECTOR_XA_CODING_FREQ_DOUBLE  0x00
-#define PSX_CDROM_SECTOR_XA_CODING_FREQ_SINGLE  0x04
-#define PSX_CDROM_SECTOR_XA_CODING_FREQ_MASK    0x0C
-#define PSX_CDROM_SECTOR_XA_CODING_BITS_4       0x00
-#define PSX_CDROM_SECTOR_XA_CODING_BITS_8       0x10
-#define PSX_CDROM_SECTOR_XA_CODING_BITS_MASK    0x30
-#define PSX_CDROM_SECTOR_XA_CODING_EMPHASIS     0x40
+enum {
+	PSX_CDROM_SECTOR_XA_CODING_MONO         = 0 << 0,
+	PSX_CDROM_SECTOR_XA_CODING_STEREO       = 1 << 0,
+	PSX_CDROM_SECTOR_XA_CODING_CHANNEL_MASK = 3 << 0,
+	PSX_CDROM_SECTOR_XA_CODING_FREQ_DOUBLE  = 0 << 2,
+	PSX_CDROM_SECTOR_XA_CODING_FREQ_SINGLE  = 1 << 2,
+	PSX_CDROM_SECTOR_XA_CODING_FREQ_MASK    = 3 << 2,
+	PSX_CDROM_SECTOR_XA_CODING_BITS_4       = 0 << 4,
+	PSX_CDROM_SECTOR_XA_CODING_BITS_8       = 1 << 4,
+	PSX_CDROM_SECTOR_XA_CODING_BITS_MASK    = 3 << 4,
+	PSX_CDROM_SECTOR_XA_CODING_EMPHASIS     = 1 << 6
+};
 
 typedef enum {
 	PSX_CDROM_SECTOR_TYPE_MODE1,
@@ -137,6 +168,6 @@ typedef enum {
 	PSX_CDROM_SECTOR_TYPE_MODE2_FORM2
 } psx_cdrom_sector_type_t;
 
-void psx_cdrom_calculate_checksums(uint8_t *sector, psx_cdrom_sector_type_t type);
-
-#endif /* __LIBPSXAV_H__ */
+void psx_cdrom_init_xa_subheader(psx_cdrom_sector_xa_subheader_t *subheader, psx_cdrom_sector_type_t type);
+void psx_cdrom_init_sector(psx_cdrom_sector_t *sector, int lba, psx_cdrom_sector_type_t type);
+void psx_cdrom_calculate_checksums(psx_cdrom_sector_t *sector, psx_cdrom_sector_type_t type);
