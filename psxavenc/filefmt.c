@@ -22,6 +22,7 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 */
 
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -432,7 +433,9 @@ void encode_file_str(const args_t *args, decoder_t *decoder, FILE *output) {
 		uint8_t sector[PSX_CDROM_SECTOR_SIZE];
 		bool is_video_sector;
 
-		if (args->flags & FLAG_STR_TRAILING_AUDIO)
+		if (audio_samples_per_sector == 0)
+			is_video_sector = true;
+		else if (args->flags & FLAG_STR_TRAILING_AUDIO)
 			is_video_sector = (sector_count % interleave) < video_sectors_per_block;
 		else
 			is_video_sector = (sector_count % interleave) > 0;
@@ -497,7 +500,114 @@ void encode_file_str(const args_t *args, decoder_t *decoder, FILE *output) {
 }
 
 void encode_file_strspu(const args_t *args, decoder_t *decoder, FILE *output) {
-	// TODO: implement
+	int interleave;
+	int audio_samples_per_sector;
+	int video_sectors_per_block;
+
+	if (decoder->state.audio_stream != NULL) {
+		assert(false); // TODO: implement
+
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(
+				stderr,
+				"Interleave: %d/%d audio, %d/%d video\n",
+				interleave - video_sectors_per_block,
+				interleave,
+				video_sectors_per_block,
+				interleave
+			);
+	} else {
+		// 0/1 audio, 1/1 video
+		interleave = 1;
+		audio_samples_per_sector = 0;
+		video_sectors_per_block = 1;
+	}
+
+	mdec_encoder_t encoder;
+	init_mdec_encoder(&encoder, args->video_codec, args->video_width, args->video_height);
+
+	// e.g. 15fps = (150*7/8/15) = 8.75 blocks per frame
+	encoder.state.frame_block_base_overflow = (75 * args->str_cd_speed) * video_sectors_per_block * args->str_fps_den;
+	encoder.state.frame_block_overflow_den = interleave * args->str_fps_num;
+	double frame_size = (double)encoder.state.frame_block_base_overflow / (double)encoder.state.frame_block_overflow_den;
+
+	if (!(args->flags & FLAG_QUIET))
+		fprintf(stderr, "Frame size: %.2f sectors\n", frame_size);
+
+	encoder.state.frame_output = malloc(2016 * (int)ceil(frame_size));
+	encoder.state.frame_index = 0;
+	encoder.state.frame_data_offset = 0;
+	encoder.state.frame_max_size = 0;
+	encoder.state.frame_block_overflow_num = 0;
+	encoder.state.quant_scale_sum = 0;
+
+	// FIXME: this needs an extra frame to prevent A/V desync
+	int frames_needed = (int) ceil((double)video_sectors_per_block / frame_size);
+
+	if (frames_needed < 2)
+		frames_needed = 2;
+
+	int sector_count = 0;
+
+	for (; !decoder->end_of_input || encoder.state.frame_data_offset < encoder.state.frame_max_size; sector_count++) {
+		ensure_av_data(decoder, audio_samples_per_sector * args->audio_channels, frames_needed);
+
+		uint8_t sector[2048];
+		bool is_video_sector;
+
+		if (audio_samples_per_sector == 0)
+			is_video_sector = true;
+		else if (args->flags & FLAG_STR_TRAILING_AUDIO)
+			is_video_sector = (sector_count % interleave) < video_sectors_per_block;
+		else
+			is_video_sector = (sector_count % interleave) > 0;
+
+		if (is_video_sector) {
+			init_sector_buffer_video(args, sector, sector_count);
+
+			int frames_used = encode_sector_str(
+				&encoder,
+				args->format,
+				args->str_video_id,
+				decoder->video_frames,
+				sector
+			);
+
+			retire_av_data(decoder, 0, frames_used);
+		} else {
+			int samples_length = decoder->audio_sample_count / args->audio_channels;
+
+			if (samples_length > audio_samples_per_sector)
+				samples_length = audio_samples_per_sector;
+
+			// FIXME: this is an extremely hacky way to handle audio tracks
+			// shorter than the video track
+			if (!samples_length)
+				video_sectors_per_block++;
+
+			assert(false); // TODO: implement
+
+			retire_av_data(decoder, samples_length * args->audio_channels, 0);
+		}
+
+		fwrite(sector, 2048, 1, output);
+
+		time_t t = get_elapsed_time();
+
+		if (!(args->flags & FLAG_HIDE_PROGRESS) && t) {
+			fprintf(
+				stderr,
+				"\rFrame: %4d | LBA: %6d | Avg. q. scale: %5.2f | Encoding speed: %5.2fx",
+				encoder.state.frame_index,
+				sector_count,
+				(double)encoder.state.quant_scale_sum / (double)encoder.state.frame_index,
+				(double)(encoder.state.frame_index * args->str_fps_den) / (double)(t * args->str_fps_num)
+			);
+		}
+	}
+
+	free(encoder.state.frame_output);
+	destroy_mdec_encoder(&encoder);
 }
 
 void encode_file_sbs(const args_t *args, decoder_t *decoder, FILE *output) {

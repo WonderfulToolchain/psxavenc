@@ -125,7 +125,7 @@ static const char *const general_options_help =
 	"                        vagi:   [A.] .vag SPU-ADPCM interleaved\n"
 	"                        str:    [AV] .str video + XA-ADPCM, 2336-byte sectors\n"
 	"                        strcd:  [AV] .str video + XA-ADPCM, 2352-byte sectors\n"
-	"                        strspu: [AV] .str video + SPU-ADPCM, 2048-byte sectors\n"
+	//"                        strspu: [AV] .str video + SPU-ADPCM, 2048-byte sectors\n"
 	"                        strv:   [.V] .str video, 2048-byte sectors\n"
 	"                        sbs:    [.V] .sbs video\n"
 	"    -R key=value,...  Pass custom options to libswresample (see FFmpeg docs)\n"
@@ -498,7 +498,7 @@ static const char *const general_usage =
 	"    psxavenc -t spu|vag   [spu-options]                             <in> <out.vag>\n"
 	"    psxavenc -t spui|vagi [spui-options]                            <in> <out.vag>\n"
 	"    psxavenc -t str|strcd [xa-options]   [bs-options] [str-options] <in> <out.str>\n"
-	"    psxavenc -t strspu    [spui-options] [bs-options] [str-options] <in> <out.str>\n"
+	//"    psxavenc -t strspu    [spui-options] [bs-options] [str-options] <in> <out.str>\n"
 	"    psxavenc -t strv                     [bs-options] [str-options] <in> <out.str>\n"
 	"    psxavenc -t sbs                      [bs-options] [sbs-options] <in> <out.sbs>\n"
 	"\n";

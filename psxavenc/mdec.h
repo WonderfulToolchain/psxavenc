@@ -64,11 +64,11 @@ typedef struct {
 
 bool init_mdec_encoder(mdec_encoder_t *encoder, bs_codec_t video_codec, int video_width, int video_height);
 void destroy_mdec_encoder(mdec_encoder_t *encoder);
-void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame);
+void encode_frame_bs(mdec_encoder_t *encoder, const uint8_t *video_frame);
 int encode_sector_str(
 	mdec_encoder_t *encoder,
 	format_t format,
 	uint16_t str_video_id,
-	uint8_t *video_frames,
+	const uint8_t *video_frames,
 	uint8_t *output
 );

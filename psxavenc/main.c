@@ -146,6 +146,10 @@ int main(int argc, const char **argv) {
 			break;
 
 		case FORMAT_STRSPU:
+			// TODO: implement and remove this check
+			fprintf(stderr, "This format is not currently supported\n");
+			break;
+
 		case FORMAT_STRV:
 			if (!(args.flags & FLAG_QUIET)) {
 				if (decoder.state.audio_stream)

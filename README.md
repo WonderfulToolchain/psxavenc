@@ -49,19 +49,18 @@ $ psxavenc -t vagi -f 44100 -c 2 -L -i 2048 in.wav out.vag
 
 The output format must be set using the `-t` option.
 
-| Format   | Audio codec          | Audio channels | Video codec   | Sector size |
-| :------- | :------------------- | :------------- | :------------ | :---------- |
-| `xa`     | XA-ADPCM             | 1 or 2         |               | 2336 bytes  |
-| `xacd`   | XA-ADPCM             | 1 or 2         |               | 2352 bytes  |
-| `spu`    | SPU-ADPCM            | 1              |               |             |
-| `vag`    | SPU-ADPCM            | 1              |               |             |
-| `spui`   | SPU-ADPCM            | Any            |               |             |
-| `vagi`   | SPU-ADPCM            | Any            |               |             |
-| `str`    | XA-ADPCM (optional)  | 1 or 2         | BS v2/v3/v3dc | 2336 bytes  |
-| `strcd`  | XA-ADPCM (optional)  | 1 or 2         | BS v2/v3/v3dc | 2352 bytes  |
-| `strspu` | SPU-ADPCM (optional) | Any            | BS v2/v3/v3dc | 2048 bytes  |
-| `strv`   |                      |                | BS v2/v3/v3dc | 2048 bytes  |
-| `sbs`    |                      |                | BS v2/v3/v3dc |             |
+| Format  | Audio codec          | Audio channels | Video codec   | Sector size |
+| :------ | :------------------- | :------------- | :------------ | :---------- |
+| `xa`    | XA-ADPCM             | 1 or 2         |               | 2336 bytes  |
+| `xacd`  | XA-ADPCM             | 1 or 2         |               | 2352 bytes  |
+| `spu`   | SPU-ADPCM            | 1              |               |             |
+| `vag`   | SPU-ADPCM            | 1              |               |             |
+| `spui`  | SPU-ADPCM            | Any            |               |             |
+| `vagi`  | SPU-ADPCM            | Any            |               |             |
+| `str`   | XA-ADPCM (optional)  | 1 or 2         | BS v2/v3/v3dc | 2336 bytes  |
+| `strcd` | XA-ADPCM (optional)  | 1 or 2         | BS v2/v3/v3dc | 2352 bytes  |
+| `strv`  |                      |                | BS v2/v3/v3dc | 2048 bytes  |
+| `sbs`   |                      |                | BS v2/v3/v3dc |             |
 
 Notes:
 
@@ -81,11 +80,12 @@ Notes:
   specified using the `-a` option (2048 bytes by default). Note that `vagi`
   files with more than 2 channels and/or alignment other than 2048 bytes are not
   standardized.
-- The `strspu` format encodes the input file's audio track as a series of custom
-  .str chunks (type ID `0x0001` by default) holding interleaved SPU-ADPCM data
-  in the same format as `spui`, rather than XA-ADPCM. As .str chunks do not
-  require custom XA subheaders, a file with standard 2048-byte sectors that does
-  not need any special handling will be generated.
+- ~~The `strspu` format encodes the input file's audio track as a series of~~
+  ~~custom .str chunks (type ID `0x0001` by default) holding interleaved~~
+  ~~SPU-ADPCM data in the same format as `spui`, rather than XA-ADPCM. As .str~~
+  ~~chunks do not require custom XA subheaders, a file with standard 2048-byte~~
+  ~~sectors that does not need any special handling will be generated.~~ *This*
+  *format has not yet been implemented.*
 - The `strv` format disables audio altogether and is equivalent to `strspu` on
   an input file with no audio track.
 - The `sbs` format (used in some System 573 games) consists of a series of
@@ -95,8 +95,8 @@ Notes:
 
 ## Supported video codecs
 
-All formats with a video track (`str`, `strcd`, `strspu`, `strv` and `sbs`) can
-use any of the codecs listed below. The codec can be set using the `-v` option.
+All formats with a video track (`str`, `strcd`, `strv` and `sbs`) can use any of
+the codecs listed below. The codec can be set using the `-v` option.
 
 | Codec          | Supported by          | Typ. decoder CPU usage |
 | :------------- | :-------------------- | :--------------------- |

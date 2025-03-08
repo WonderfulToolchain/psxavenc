@@ -577,7 +577,7 @@ void destroy_mdec_encoder(mdec_encoder_t *encoder) {
 	}
 }
 
-void encode_frame_bs(mdec_encoder_t *encoder, uint8_t *video_frame) {
+void encode_frame_bs(mdec_encoder_t *encoder, const uint8_t *video_frame) {
 	mdec_encoder_state_t *state = &(encoder->state);
 
 	assert(state->dct_context);
@@ -758,15 +758,12 @@ int encode_sector_str(
 	mdec_encoder_t *encoder,
 	format_t format,
 	uint16_t str_video_id,
-	uint8_t *video_frames,
+	const uint8_t *video_frames,
 	uint8_t *output
 ) {
 	mdec_encoder_state_t *state = &(encoder->state);
-	int last_frame_index = state->frame_index;
 	int frame_size = encoder->video_width * encoder->video_height * 2;
-
-	uint8_t header[32];
-	memset(header, 0, sizeof(header));
+	int frames_used = 0;
 
 	while (state->frame_data_offset >= state->frame_max_size) {
 		state->frame_index++;
@@ -779,7 +776,11 @@ int encode_sector_str(
 
 		encode_frame_bs(encoder, video_frames);
 		video_frames += frame_size;
+		frames_used++;
 	}
+
+	uint8_t header[32];
+	memset(header, 0, sizeof(header));
 
 	// STR version
 	header[0x000] = 0x60;
@@ -831,5 +832,5 @@ int encode_sector_str(
 	memcpy(output + offset + 0x020, state->frame_output + state->frame_data_offset, 2016);
 
 	state->frame_data_offset += 2016;
-	return state->frame_index - last_frame_index;
+	return frames_used;
 }
