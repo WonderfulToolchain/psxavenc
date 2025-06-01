@@ -588,10 +588,10 @@ void encode_frame_bs(mdec_encoder_t *encoder, const uint8_t *video_frame) {
 	if (real_index > (video_frame_count - 1))
 		real_index = video_frame_count - 1;
 
-	uint8_t *y_plane = video_frames + encoder->video_width * encoder->video_height * 3/2 * real_index;
+	const uint8_t *y_plane = video_frames + encoder->video_width * encoder->video_height * 3/2 * real_index;
 #else
-	uint8_t *y_plane = video_frame;
-	uint8_t *c_plane = y_plane + (encoder->video_width * encoder->video_height);
+	const uint8_t *y_plane = video_frame;
+	const uint8_t *c_plane = y_plane + (encoder->video_width * encoder->video_height);
 #endif
 
 	int dct_block_count_x = (encoder->video_width + 15) / 16;
