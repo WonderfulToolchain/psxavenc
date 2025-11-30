@@ -447,8 +447,6 @@ void close_av_data(decoder_t *decoder) {
 
 	av_frame_free(&(av->frame));
 	swr_free(&(av->resampler));
-	// Deprecated, kept for compatibility with older FFmpeg versions.
-	avcodec_close(av->audio_codec_context);
 	avcodec_free_context(&(av->audio_codec_context));
 	avformat_free_context(av->format);
 
