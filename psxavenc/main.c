@@ -3,7 +3,7 @@ psxavenc: MDEC video + SPU/XA-ADPCM audio encoder frontend
 
 Copyright (c) 2019, 2020 Adrian "asie" Siekierka
 Copyright (c) 2019 Ben "GreaseMonkey" Russell
-Copyright (c) 2023 spicyjpeg
+Copyright (c) 2023, 2025 spicyjpeg
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -72,6 +72,7 @@ int main(int argc, const char **argv) {
 
 	if (output == NULL) {
 		fprintf(stderr, "Failed to open output file: %s\n", args.output_file);
+		close_av_data(&decoder);
 		return 1;
 	}
 
@@ -94,6 +95,13 @@ int main(int argc, const char **argv) {
 
 		case FORMAT_SPU:
 		case FORMAT_VAG:
+			if (!(args.flags & FLAG_OVERRIDE_LOOP_POINT)) {
+				args.audio_loop_point = get_av_loop_point(&decoder, &args);
+
+				if (args.audio_loop_point >= 0)
+					args.flags |= FLAG_SPU_ENABLE_LOOP;
+			}
+
 			if (!(args.flags & FLAG_QUIET))
 				fprintf(
 					stderr,
@@ -106,6 +114,9 @@ int main(int argc, const char **argv) {
 
 		case FORMAT_SPUI:
 		case FORMAT_VAGI:
+			if (!(args.flags & FLAG_OVERRIDE_LOOP_POINT))
+				args.audio_loop_point = get_av_loop_point(&decoder, &args);
+
 			if (!(args.flags & FLAG_QUIET))
 				fprintf(
 					stderr,
@@ -121,7 +132,7 @@ int main(int argc, const char **argv) {
 		case FORMAT_STR:
 		case FORMAT_STRCD:
 			if (!(args.flags & FLAG_QUIET)) {
-				if (decoder.state.audio_stream)
+				if (decoder.state.audio_stream != NULL)
 					fprintf(
 						stderr,
 						"Audio format: XA-ADPCM, %d Hz %d-bit %s, F=%d C=%d\n",
@@ -152,7 +163,7 @@ int main(int argc, const char **argv) {
 
 		case FORMAT_STRV:
 			if (!(args.flags & FLAG_QUIET)) {
-				if (decoder.state.audio_stream)
+				if (decoder.state.audio_stream != NULL)
 					fprintf(
 						stderr,
 						"Audio format: SPU-ADPCM, %d Hz %d channels, interleave=%d\n",

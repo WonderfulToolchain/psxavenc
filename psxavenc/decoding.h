@@ -25,6 +25,7 @@ freely, subject to the following restrictions:
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
 #include <libavcodec/avdct.h>
@@ -74,6 +75,7 @@ enum {
 };
 
 bool open_av_data(decoder_t *decoder, const args_t *args, int flags);
+int get_av_loop_point(decoder_t *decoder, const args_t *args);
 bool poll_av_data(decoder_t *decoder);
 bool ensure_av_data(decoder_t *decoder, int needed_audio_samples, int needed_video_frames);
 void retire_av_data(decoder_t *decoder, int retired_audio_samples, int retired_video_frames);

@@ -270,13 +270,14 @@ static int parse_xa_option(args_t *args, char option, const char *param) {
 
 static const char *const spu_options_help =
 	"Mono SPU-ADPCM options:\n"
-	"    [-f freq] [-a size] [-l ms | -L] [-D]\n"
+	"    [-f freq] [-a size] [-l ms | -n | -L] [-D]\n"
 	"\n"
 	"    -f freq           Use specified sample rate (default 44100)\n"
 	"    -a size           Pad audio data excluding header to multiple of given size (default 64)\n"
-	"    -l ms             Add loop point at specified offset (in milliseconds)\n"
-	"    -L                Set loop end flag at the end of data but do not add a loop point\n"
-	"    -D                Do not prepend encoded data with a dummy silent block\n"
+	"    -l ms             Add loop point at specified timestamp (in milliseconds, overrides any loop point present in input file)\n"
+	"    -n                Do not set loop end flag nor add a loop point (even if input file has one)\n"
+	"    -L                Set ADPCM loop end flag at end of data but do not add a loop point (even if input file has one)\n"
+	"    -D                Do not prepend encoded data with a dummy silent block to reset decoder state\n"
 	"\n";
 
 static int parse_spu_option(args_t *args, char option, const char *param) {
@@ -288,11 +289,17 @@ static int parse_spu_option(args_t *args, char option, const char *param) {
 			return parse_int(&(args->alignment), "alignment", param, 1, -1);
 
 		case 'l':
-			args->flags |= FLAG_SPU_LOOP_END;
+			args->flags |= FLAG_OVERRIDE_LOOP_POINT | FLAG_SPU_ENABLE_LOOP;
 			return parse_int(&(args->audio_loop_point), "loop offset", param, 0, -1);
 
+		case 'n':
+			args->flags |= FLAG_OVERRIDE_LOOP_POINT;
+			args->audio_loop_point = -1;
+			return 1;
+
 		case 'L':
-			args->flags |= FLAG_SPU_LOOP_END;
+			args->flags |= FLAG_OVERRIDE_LOOP_POINT | FLAG_SPU_ENABLE_LOOP;
+			args->audio_loop_point = -1;
 			return 1;
 
 		case 'D':
@@ -306,15 +313,16 @@ static int parse_spu_option(args_t *args, char option, const char *param) {
 
 static const char *const spui_options_help =
 	"Interleaved SPU-ADPCM options:\n"
-	"    [-f freq] [-c channels] [-i size] [-a size] [-L] [-D]\n"
+	"    [-f freq] [-c channels] [-i size] [-a size] [-l ms | -n] [-L] [-D]\n"
 	"\n"
 	"    -f freq           Use specified sample rate (default 44100)\n"
 	"    -c channels       Use specified channel count (default 2)\n"
 	"    -i size           Use specified channel interleave size (default 2048)\n"
-	"    -a size           Pad .vag header and each audio chunk to multiples of given size\n"
-	"                      (default 2048)\n"
-	"    -L                Set loop end flag at the end of each audio chunk\n"
-	"    -D                Do not prepend first chunk's data with a dummy silent block\n"
+	"    -a size           Pad .vag header and each audio chunk to multiples of given size (default 2048)\n"
+	"    -l ms             Store specified timestamp in file header as loop point (in milliseconds, overrides any loop point present in input file)\n"
+	"    -n                Do not store any loop point in file header (even if input file has one)\n"
+	"    -L                Set ADPCM loop end flag at the end of each audio chunk (separately from loop point in file header)\n"
+	"    -D                Do not prepend first chunk's data with a dummy silent block to reset decoder state\n"
 	"\n";
 
 static int parse_spui_option(args_t *args, char option, const char *param) {
@@ -337,8 +345,17 @@ static int parse_spui_option(args_t *args, char option, const char *param) {
 		case 'a':
 			return parse_int(&(args->alignment), "alignment", param, 1, -1);
 
+		case 'l':
+			args->flags |= FLAG_OVERRIDE_LOOP_POINT;
+			return parse_int(&(args->audio_loop_point), "loop offset", param, 0, -1);
+
+		case 'n':
+			args->flags |= FLAG_OVERRIDE_LOOP_POINT;
+			args->audio_loop_point = -1;
+			return 1;
+
 		case 'L':
-			args->flags |= FLAG_SPU_LOOP_END;
+			args->flags |= FLAG_SPU_ENABLE_LOOP;
 			return 1;
 
 		case 'D':
@@ -358,8 +375,7 @@ static const char *const bs_options_help =
 	"                        v2:   MDEC BS v2 (default)\n"
 	"                        v3:   MDEC BS v3\n"
 	"                        v3dc: MDEC BS v3, expect decoder to wrap DC coefficients\n"
-	"    -s WxH            Rescale input file to fit within specified size\n"
-	"                      (16x16-640x512 in 16-pixel increments, default 320x240)\n"
+	"    -s WxH            Rescale input file to fit within specified size (16x16-640x512 in 16-pixel increments, default 320x240)\n"
 	"    -I                Force stretching to given size without preserving aspect ratio\n"
 	"\n";
 
@@ -422,8 +438,7 @@ static const char *const str_options_help =
 	"    -x 1|2            Set CD-ROM speed the file is meant to played at (default 2)\n"
 	"    -T id             Tag video sectors with specified .str type ID (default 0x8001)\n"
 	"    -A id             Tag SPU-ADPCM sectors with specified .str type ID (default 0x0001)\n"
-	"    -X                Place audio sectors after corresponding video sectors\n"
-	"                      (rather than ahead of them)\n"
+	"    -X                Place audio sectors after corresponding video sectors rather than ahead of them\n"
 	"\n";
 
 static int parse_str_option(args_t *args, char option, const char *param) {
