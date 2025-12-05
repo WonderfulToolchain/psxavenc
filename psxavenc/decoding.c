@@ -447,6 +447,10 @@ void close_av_data(decoder_t *decoder) {
 
 	av_frame_free(&(av->frame));
 	swr_free(&(av->resampler));
+#if LIBAVCODEC_VERSION_MAJOR < 61
+	// Deprecated, kept for compatibility with older FFmpeg versions.
+	avcodec_close(av->audio_codec_context);
+#endif
 	avcodec_free_context(&(av->audio_codec_context));
 	avformat_free_context(av->format);
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ROOT_DIR="$(pwd)"
-FFMPEG_VERSION="7.1.1"
+FFMPEG_VERSION="8.0.1"
 NUM_JOBS="4"
 
 if [ $# -eq 1 ]; then
@@ -44,7 +44,6 @@ cd ffmpeg-build
 	--disable-programs \
 	--disable-doc \
 	--disable-avdevice \
-	--disable-postproc \
 	--disable-avfilter \
 	--disable-network \
 	--disable-encoders \
