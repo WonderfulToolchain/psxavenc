@@ -384,11 +384,9 @@ int psx_audio_spu_encode_simple(const int16_t *samples, int sample_count, uint8_
 		uint8_t *last_block = output + length - PSX_AUDIO_SPU_BLOCK_SIZE;
 
 		if (loop_start < 0) {
-			last_block[1] |= PSX_AUDIO_SPU_LOOP_END;
-
 			// Insert trailing looping block
 			memset(output + length, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
-			output[length + 1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+			output[length + 1] = PSX_AUDIO_SPU_LOOP_TRAP;
 
 			length += PSX_AUDIO_SPU_BLOCK_SIZE;
 		} else {

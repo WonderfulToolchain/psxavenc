@@ -62,9 +62,12 @@ typedef struct {
 } psx_audio_encoder_state_t;
 
 enum {
-	PSX_AUDIO_SPU_LOOP_END    = 1 << 0,
-	PSX_AUDIO_SPU_LOOP_REPEAT = 3 << 0,
-	PSX_AUDIO_SPU_LOOP_START  = 1 << 2
+	PSX_AUDIO_SPU_LOOP_END    = (1 << 0),
+	PSX_AUDIO_SPU_LOOP_REPEAT = (1 << 0) | (1 << 1),
+	// Some old tools will not recognize loop start points if bit 1 is not set
+	// in addition to bit 2. Real hardware does not care.
+	PSX_AUDIO_SPU_LOOP_START  = (1 << 1) | (1 << 2),
+	PSX_AUDIO_SPU_LOOP_TRAP   = (1 << 0) | (1 << 2)
 };
 
 uint32_t psx_audio_xa_get_buffer_size(psx_audio_xa_settings_t settings, int sample_count);

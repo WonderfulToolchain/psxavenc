@@ -23,6 +23,7 @@ freely, subject to the following restrictions:
 */
 
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -104,13 +105,13 @@ static void write_vag_header(const args_t *args, int size_per_channel, uint8_t *
 	else
 	 	header[0x03] = 'p';
 
-	// Version (big-endian)
+	// Version (big endian)
 	header[0x04] = 0x00;
 	header[0x05] = 0x00;
 	header[0x06] = 0x00;
 	header[0x07] = 0x20;
 
-	// Interleave (little-endian)
+	// Interleave (little endian)
 	if (args->format == FORMAT_VAGI) {
 		header[0x08] = (uint8_t)args->audio_interleave;
 		header[0x09] = (uint8_t)(args->audio_interleave >> 8);
@@ -118,24 +119,38 @@ static void write_vag_header(const args_t *args, int size_per_channel, uint8_t *
 		header[0x0B] = (uint8_t)(args->audio_interleave >> 24);
 	}
 
-	// Length of data for each channel (big-endian)
+	// Length of data for each channel (big endian)
 	header[0x0C] = (uint8_t)(size_per_channel >> 24);
 	header[0x0D] = (uint8_t)(size_per_channel >> 16);
 	header[0x0E] = (uint8_t)(size_per_channel >> 8);
 	header[0x0F] = (uint8_t)size_per_channel;
 
-	// Sample rate (big-endian)
+	// Sample rate (big endian)
 	header[0x10] = (uint8_t)(args->audio_frequency >> 24);
 	header[0x11] = (uint8_t)(args->audio_frequency >> 16);
 	header[0x12] = (uint8_t)(args->audio_frequency >> 8);
 	header[0x13] = (uint8_t)args->audio_frequency;
 
-	// Number of channels (little-endian)
+	// Loop point in bytes (big endian, non-standard)
+	if (args->format == FORMAT_VAGI && args->audio_loop_point >= 0) {
+		int loop_start_block = (args->audio_loop_point * args->audio_frequency) / (PSX_AUDIO_SPU_SAMPLES_PER_BLOCK * 1000);
+
+		if (!(args->flags & FLAG_SPU_NO_LEADING_DUMMY))
+			loop_start_block++;
+
+		int loop_point = loop_start_block * PSX_AUDIO_SPU_BLOCK_SIZE;
+		header[0x14] = (uint8_t)(loop_point >> 24);
+		header[0x15] = (uint8_t)(loop_point >> 16);
+		header[0x16] = (uint8_t)(loop_point >> 8);
+		header[0x17] = (uint8_t)loop_point;
+	}
+
+	// Number of channels (non-standard)
 	header[0x1E] = (uint8_t)args->audio_channels;
-	header[0x1F] = 0x00;
 
 	// Filename
 	int name_offset = strlen(args->output_file);
+
 	while (
 		name_offset > 0 &&
 		args->output_file[name_offset - 1] != '/' &&
@@ -235,7 +250,7 @@ void encode_file_spu(const args_t *args, decoder_t *decoder, FILE *output) {
 
 		if (block_count == loop_start_block)
 			block[1] |= PSX_AUDIO_SPU_LOOP_START;
-		if ((args->flags & FLAG_SPU_LOOP_END) && decoder->end_of_input)
+		if ((args->flags & FLAG_SPU_ENABLE_LOOP) && decoder->end_of_input)
 			block[1] |= PSX_AUDIO_SPU_LOOP_REPEAT;
 
 		retire_av_data(decoder, samples_length, 0);
@@ -253,10 +268,10 @@ void encode_file_spu(const args_t *args, decoder_t *decoder, FILE *output) {
 		}
 	}
 
-	if (!(args->flags & FLAG_SPU_LOOP_END)) {
+	if (!(args->flags & FLAG_SPU_ENABLE_LOOP)) {
 		// Insert trailing looping block
 		memset(block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
-		block[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+		block[1] = PSX_AUDIO_SPU_LOOP_TRAP;
 
 		fwrite(block, PSX_AUDIO_SPU_BLOCK_SIZE, 1, output);
 		block_count++;
@@ -291,6 +306,8 @@ void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output) {
 
 	if (args->format == FORMAT_VAGI)
 		fseek(output, header_size, SEEK_SET);
+	else if (args->audio_loop_point >= 0 && !(args->flags & FLAG_QUIET))
+		fprintf(stderr, "Warning: ignoring loop point as there is no header to store it in\n");
 
 	int audio_state_size = sizeof(psx_audio_encoder_channel_state_t) * args->audio_channels;
 	psx_audio_encoder_channel_state_t *audio_state = malloc(audio_state_size);
@@ -326,14 +343,17 @@ void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output) {
 			if (length > 0) {
 				uint8_t *last_block = chunk_ptr + length - PSX_AUDIO_SPU_BLOCK_SIZE;
 
-				if (args->flags & FLAG_SPU_LOOP_END) {
+				if (
+					(args->flags & FLAG_SPU_ENABLE_LOOP) ||
+					(decoder->end_of_input && args->audio_loop_point >= 0)
+				) {
 					last_block[1] = PSX_AUDIO_SPU_LOOP_REPEAT;
 				} else if (decoder->end_of_input) {
 					// HACK: the trailing block should in theory be appended to
 					// the existing data, but it's easier to just zerofill and
-					// repurpose the last encoded block
+					// repurpose the last encoded block.
 					memset(last_block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
-					last_block[1] = PSX_AUDIO_SPU_LOOP_START | PSX_AUDIO_SPU_LOOP_END;
+					last_block[1] = PSX_AUDIO_SPU_LOOP_TRAP;
 				}
 			}
 		}
@@ -420,7 +440,7 @@ void encode_file_str(const args_t *args, decoder_t *decoder, FILE *output) {
 	encoder.state.quant_scale_sum = 0;
 
 	// FIXME: this needs an extra frame to prevent A/V desync
-	int frames_needed = (int) ceil((double)video_sectors_per_block / frame_size);
+	int frames_needed = (int)ceil((double)video_sectors_per_block / frame_size);
 
 	if (frames_needed < 2)
 		frames_needed = 2;
@@ -542,7 +562,7 @@ void encode_file_strspu(const args_t *args, decoder_t *decoder, FILE *output) {
 	encoder.state.quant_scale_sum = 0;
 
 	// FIXME: this needs an extra frame to prevent A/V desync
-	int frames_needed = (int) ceil((double)video_sectors_per_block / frame_size);
+	int frames_needed = (int)ceil((double)video_sectors_per_block / frame_size);
 
 	if (frames_needed < 2)
 		frames_needed = 2;

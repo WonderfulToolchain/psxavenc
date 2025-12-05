@@ -71,23 +71,43 @@ Notes:
   authoring tool capable of rebuilding the EDC/ECC data (as it is dependent on
   the file's absolute location on the disc) and generating a Mode 2 CD-ROM image
   with "native" 2352-byte sectors.
+
 - Similarly, files generated with `-t xa` or `-t xacd` **must be interleaved**
   **with other XA-ADPCM tracks or empty padding using an external tool** before
   they can be played.
-- `vag` and `vagi` are similar to `spu` and `spui` respectively, but add a .vag
-  header at the beginning of the file. The header is always 48 bytes long for
-  `vag` files, while in the case of `vagi` files it is padded to the size
-  specified using the `-a` option (2048 bytes by default). Note that `vagi`
-  files with more than 2 channels and/or alignment other than 2048 bytes are not
-  standardized.
+
+- `vag` and `vagi` are similar to `spu` and `spui` respectively, but add a
+  [.vag header](https://psx-spx.consoledev.net/cdromfileformats/#cdrom-file-audio-single-samples-vag-sony)
+  at the beginning of the file. The header is always 48 bytes long for `vag`
+  files, while in the case of `vagi` files it is padded to the size specified
+  using the `-a` option (2048 bytes by default). The `vagi` format extends the
+  header with the following fields:
+  - the file's interleave size at offset `0x08-0x0B` (little endian);
+  - the loop start offset in bytes-per-channel, if any, at offset `0x14-0x17`
+    (big endian). *Note that this field is specific to psxavenc and not part of*
+    *the standard interleaved .vag header*;
+  - the file's channel count at offset `0x1E`. *This field is not part of the*
+    *interleaved .vag header either, but can be found in other variants of the*
+    *format.*
+
+- The `spu` and `vag` formats support encoding a loop point as part of the ADPCM
+  data, while `vagi` supports storing one in the header for use by the stream
+  driver. If the input file is either a .wav file with sampler metadata (`smpl`
+  chunk) or in a format FFmpeg supports parsing cue/chapter markers from, the
+  first marker will be used as the loop point by default. The `-l` and `-n`
+  options can be used to manually set a loop point or ignore the one present in
+  the input file respectively.
+
 - ~~The `strspu` format encodes the input file's audio track as a series of~~
   ~~custom .str chunks (type ID `0x0001` by default) holding interleaved~~
   ~~SPU-ADPCM data in the same format as `spui`, rather than XA-ADPCM. As .str~~
   ~~chunks do not require custom XA subheaders, a file with standard 2048-byte~~
   ~~sectors that does not need any special handling will be generated.~~ *This*
   *format has not yet been implemented.*
+
 - The `strv` format disables audio altogether and is equivalent to `strspu` on
   an input file with no audio track.
+
 - The `sbs` format (used in some System 573 games) consists of a series of
   concatenated BS frames, each padded to the size specified by the `-a` option
   (the default setting is 8192 bytes), with no additional headers besides the BS

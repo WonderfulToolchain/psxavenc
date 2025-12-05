@@ -3,7 +3,7 @@ psxavenc: MDEC video + SPU/XA-ADPCM audio encoder frontend
 
 Copyright (c) 2019, 2020 Adrian "asie" Siekierka
 Copyright (c) 2019 Ben "GreaseMonkey" Russell
-Copyright (c) 2023 spicyjpeg
+Copyright (c) 2023, 2025 spicyjpeg
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -23,7 +23,10 @@ freely, subject to the following restrictions:
 */
 
 #include <assert.h>
+#include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +38,77 @@ freely, subject to the following restrictions:
 #include <libswscale/swscale.h>
 #include "args.h"
 #include "decoding.h"
+
+enum {
+	LOOP_TYPE_FORWARD,
+	LOOP_TYPE_PING_PONG,
+	LOOP_TYPE_BACKWARD
+};
+
+// HACK: FFmpeg does not parse "smpl" chunks out of .wav files on its own, so a
+// minimal RIFF chunk parser needs to be implemented here. (It does however
+// parse "cue" chunk entries as chapters; if no "smpl" chunk is found, the
+// file's first chapter if any is used as a loop point by default.)
+static int parse_wav_loop_point(AVIOContext *pb, const args_t *args) {
+	if (!pb->seekable) {
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(stderr, "Warning: input file is not seekable, cannot parse loop points\n");
+		return -1;
+	}
+
+	int64_t saved_file_pos = avio_tell(pb);
+	int start_offset = -1;
+
+	if (avio_seek(pb, 0, SEEK_SET) != 0)
+		return -1;
+
+	avio_rl32(pb); // "RIFF" magic
+	avio_rl32(pb); // File size
+	avio_rl32(pb); // "WAVE" magic
+
+	while (!avio_feof(pb)) {
+		uint32_t chunk_type = avio_rl32(pb);
+		uint32_t chunk_size = avio_rl32(pb);
+
+		if (chunk_type != MKTAG('s', 'm', 'p', 'l') || chunk_size < (sizeof(uint32_t) * 9)) {
+			avio_skip(pb, chunk_size);
+			continue;
+		}
+
+		avio_rl32(pb); // Manufacturer ID
+		avio_rl32(pb); // Product ID
+		avio_rl32(pb); // Sample period (ns)
+		avio_rl32(pb); // MIDI unity note number
+		avio_rl32(pb); // MIDI pitch fraction
+		avio_rl32(pb); // SMPTE format
+		avio_rl32(pb); // SMPTE offset
+		uint32_t loop_count = avio_rl32(pb);
+		avio_rl32(pb); // Additional data size
+
+		if (loop_count == 0)
+			break;
+		if (loop_count > 1 && !(args->flags & FLAG_QUIET))
+			fprintf(stderr, "Warning: input file has %d loop points, using first one\n", (int)loop_count);
+
+		avio_rl32(pb); // Loop ID
+		uint32_t loop_type = avio_rl32(pb);
+		start_offset = (int)avio_rl32(pb);
+		avio_rl32(pb); // End offset
+		avio_rl32(pb); // Sample fraction
+		uint32_t play_count = avio_rl32(pb);
+
+		if (!(args->flags & FLAG_QUIET)) {
+			if (loop_type != LOOP_TYPE_FORWARD)
+				fprintf(stderr, "Warning: treating %s loop as forward loop\n", (loop_type == LOOP_TYPE_PING_PONG) ? "ping-pong" : "backward");
+			if (play_count != 0)
+				fprintf(stderr, "Warning: treating loop repeating %d times as endless loop\n", (int)play_count);
+		}
+		break;
+	}
+
+	avio_seek(pb, saved_file_pos, SEEK_SET);
+	return start_offset;
+}
 
 static bool decode_frame(AVCodecContext *codec, AVFrame *frame, int *frame_size, AVPacket *packet) {
 	if (packet != NULL) {
@@ -152,10 +226,11 @@ bool open_av_data(decoder_t *decoder, const args_t *args, int flags) {
 			layout.order = AV_CHANNEL_ORDER_UNSPEC;
 		}
 
-		if (!(args->flags & FLAG_QUIET)) {
-			if (args->audio_channels > av->audio_codec_context->ch_layout.nb_channels)
-				fprintf(stderr, "Warning: input file has less than %d channels\n", args->audio_channels);
-		}
+		if (
+			args->audio_channels > av->audio_codec_context->ch_layout.nb_channels &&
+			!(args->flags & FLAG_QUIET)
+		)
+			fprintf(stderr, "Warning: input file has less than %d channels\n", args->audio_channels);
 
 		av->sample_count_mul = args->audio_channels;
 
@@ -191,13 +266,11 @@ bool open_av_data(decoder_t *decoder, const args_t *args, int flags) {
 		if (avcodec_open2(av->video_codec_context, codec, NULL) < 0)
 			return false;
 
-		if (!(args->flags & FLAG_QUIET)) {
-			if (
-				decoder->video_width > av->video_codec_context->width ||
-				decoder->video_height > av->video_codec_context->height
-			)
-				fprintf(stderr, "Warning: input file has resolution lower than %dx%d\n", decoder->video_width, decoder->video_height);
-		}
+		if (
+			(decoder->video_width > av->video_codec_context->width || decoder->video_height > av->video_codec_context->height) &&
+			!(args->flags & FLAG_QUIET)
+		)
+			fprintf(stderr, "Warning: input file has resolution lower than %dx%d\n", decoder->video_width, decoder->video_height);
 
 		if (!(args->flags & FLAG_BS_IGNORE_ASPECT)) {
 			// Reduce the provided size so that it matches the input file's
@@ -205,11 +278,10 @@ bool open_av_data(decoder_t *decoder, const args_t *args, int flags) {
 			double src_ratio = (double)av->video_codec_context->width / (double)av->video_codec_context->height;
 			double dst_ratio = (double)decoder->video_width / (double)decoder->video_height;
 
-			if (src_ratio < dst_ratio) {
-				decoder->video_width = (int)((double)decoder->video_height * src_ratio + 15.0) & ~15;
-			} else {
-				decoder->video_height = (int)((double)decoder->video_width / src_ratio + 15.0) & ~15;
-			}
+			if (src_ratio < dst_ratio)
+				decoder->video_width = ((int)round((double)decoder->video_height * src_ratio) + 15) & ~15;
+			else
+				decoder->video_height = ((int)round((double)decoder->video_width / src_ratio) + 15) & ~15;
 		}
 
 		av->scaler = sws_getContext(
@@ -251,6 +323,48 @@ bool open_av_data(decoder_t *decoder, const args_t *args, int flags) {
 		return false;
 
 	return true;
+}
+
+int get_av_loop_point(decoder_t *decoder, const args_t *args) {
+	decoder_state_t *av = &(decoder->state);
+
+	if (strcmp(av->format->iformat->name, "wav") == 0 && av->audio_stream != NULL) {
+		int start_offset = parse_wav_loop_point(av->format->pb, args);
+
+		if (start_offset >= 0) {
+			double pts = (double)start_offset / (double)av->audio_codec_context->sample_rate;
+			int loop_point = (int)round(pts * 1000.0);
+
+			if (!(args->flags & FLAG_QUIET))
+				fprintf(stderr, "Detected loop point (from smpl data): %d ms\n", loop_point);
+			return loop_point;
+		}
+	}
+
+	AVDictionaryEntry *loop_start_tag = av_dict_get(av->format->metadata, "loop_start", 0, 0);
+
+	if (loop_start_tag != NULL) {
+		int loop_point = (int)((strtoll(loop_start_tag->value, NULL, 10) * 1000) / AV_TIME_BASE);
+
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(stderr, "Detected loop point (from metadata): %d ms\n", loop_point);
+		return loop_point;
+	}
+
+	if (av->format->nb_chapters > 0) {
+		if (av->format->nb_chapters > 1 && !(args->flags & FLAG_QUIET))
+			fprintf(stderr, "Warning: input file has %d chapters, using first one as loop point\n", av->format->nb_chapters);
+
+		AVChapter *chapter = av->format->chapters[0];
+		double pts = (double)chapter->start * (double)chapter->time_base.num / (double)chapter->time_base.den;
+		int loop_point = (int)round(pts * 1000.0);
+
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(stderr, "Detected loop point (from first chapter): %d ms\n", loop_point);
+		return loop_point;
+	}
+
+	return -1;
 }
 
 static void poll_av_packet_audio(decoder_t *decoder, AVPacket *packet) {
@@ -309,9 +423,8 @@ static void poll_av_packet_video(decoder_t *decoder, AVPacket *packet) {
 
 	// Some files seem to have timestamps starting from a negative value
 	// (but otherwise valid) for whatever reason.
-	double pts =
-		((double)av->frame->pts * (double)av->video_stream->time_base.num)
-		/ av->video_stream->time_base.den;
+	double pts = (double)av->frame->pts * (double)av->video_stream->time_base.num / (double)av->video_stream->time_base.den;
+
 #if 0
 	if (pts < 0.0)
 		return;
@@ -325,10 +438,13 @@ static void poll_av_packet_video(decoder_t *decoder, AVPacket *packet) {
 
 	//fprintf(stderr, "%d %f %f %f\n", decoder->video_frame_count, pts, av->video_next_pts, pts_step);
 
-	// Insert duplicate frames if the frame rate of the input stream is
-	// lower than the target frame rate.
-	int dupe_frames = (int) ceil((pts - av->video_next_pts) / pts_step);
-	if (dupe_frames < 0) dupe_frames = 0;
+	// Insert duplicate frames if the frame rate of the input stream is lower
+	// than the target frame rate.
+	int dupe_frames = (int)ceil((pts - av->video_next_pts) / pts_step);
+
+	if (dupe_frames < 0)
+		dupe_frames = 0;
+
 	decoder->video_frames = realloc(
 		decoder->video_frames,
 		(decoder->video_frame_count + dupe_frames + 1) * av->video_frame_dst_size
