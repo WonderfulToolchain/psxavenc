@@ -341,6 +341,16 @@ int get_av_loop_point(decoder_t *decoder, const args_t *args) {
 		}
 	}
 
+	AVDictionaryEntry *loop_start_tag = av_dict_get(av->format->metadata, "loop_start", 0, 0);
+
+	if (loop_start_tag != NULL) {
+		int loop_point = (int)((strtoll(loop_start_tag->value, NULL, 10) * 1000) / AV_TIME_BASE);
+
+		if (!(args->flags & FLAG_QUIET))
+			fprintf(stderr, "Detected loop point (from metadata): %d ms\n", loop_point);
+		return loop_point;
+	}
+
 	if (av->format->nb_chapters > 0) {
 		if (av->format->nb_chapters > 1 && !(args->flags & FLAG_QUIET))
 			fprintf(stderr, "Warning: input file has %d chapters, using first one as loop point\n", av->format->nb_chapters);
