@@ -81,11 +81,14 @@ Notes:
   at the beginning of the file. The header is always 48 bytes long for `vag`
   files, while in the case of `vagi` files it is padded to the size specified
   using the `-a` option (2048 bytes by default). The `vagi` format extends the
-  standard .vag header by adding the following fields:
+  header with the following fields:
   - the file's interleave size at offset `0x08-0x0B` (little endian);
   - the loop start offset in bytes-per-channel, if any, at offset `0x14-0x17`
-    (little endian);
-  - the file's channel count at offset `0x1E`.
+    (big endian). *Note that this field is specific to psxavenc and not part of*
+    *the standard interleaved .vag header*;
+  - the file's channel count at offset `0x1E`. *This field is not part of the*
+    *interleaved .vag header either, but can be found in other variants of the*
+    *format.*
 
 - The `spu` and `vag` formats support encoding a loop point as part of the ADPCM
   data, while `vagi` supports storing one in the header for use by the stream

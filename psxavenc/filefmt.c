@@ -131,7 +131,7 @@ static void write_vag_header(const args_t *args, int size_per_channel, uint8_t *
 	header[0x12] = (uint8_t)(args->audio_frequency >> 8);
 	header[0x13] = (uint8_t)args->audio_frequency;
 
-	// Loop point in bytes (little endian, non-standard)
+	// Loop point in bytes (big endian, non-standard)
 	if (args->format == FORMAT_VAGI && args->audio_loop_point >= 0) {
 		int loop_start_block = (args->audio_loop_point * args->audio_frequency) / (PSX_AUDIO_SPU_SAMPLES_PER_BLOCK * 1000);
 
@@ -139,15 +139,14 @@ static void write_vag_header(const args_t *args, int size_per_channel, uint8_t *
 			loop_start_block++;
 
 		int loop_point = loop_start_block * PSX_AUDIO_SPU_BLOCK_SIZE;
-		header[0x14] = (uint8_t)loop_point;
-		header[0x15] = (uint8_t)(loop_point >> 8);
-		header[0x16] = (uint8_t)(loop_point >> 16);
-		header[0x17] = (uint8_t)(loop_point >> 24);
+		header[0x14] = (uint8_t)(loop_point >> 24);
+		header[0x15] = (uint8_t)(loop_point >> 16);
+		header[0x16] = (uint8_t)(loop_point >> 8);
+		header[0x17] = (uint8_t)loop_point;
 	}
 
-	// Number of channels (little endian, non-standard)
+	// Number of channels (non-standard)
 	header[0x1E] = (uint8_t)args->audio_channels;
-	header[0x1F] = 0x00;
 
 	// Filename
 	int name_offset = strlen(args->output_file);
