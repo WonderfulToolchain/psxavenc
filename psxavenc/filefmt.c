@@ -307,6 +307,8 @@ void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output) {
 
 	if (args->format == FORMAT_VAGI)
 		fseek(output, header_size, SEEK_SET);
+	else if (args->audio_loop_point >= 0 && !(args->flags & FLAG_QUIET))
+		fprintf(stderr, "Warning: ignoring loop point as there is no header to store it in\n");
 
 	int audio_state_size = sizeof(psx_audio_encoder_channel_state_t) * args->audio_channels;
 	psx_audio_encoder_channel_state_t *audio_state = malloc(audio_state_size);
@@ -342,12 +344,15 @@ void encode_file_spui(const args_t *args, decoder_t *decoder, FILE *output) {
 			if (length > 0) {
 				uint8_t *last_block = chunk_ptr + length - PSX_AUDIO_SPU_BLOCK_SIZE;
 
-				if (args->flags & FLAG_SPU_ENABLE_LOOP) {
+				if (
+					(args->flags & FLAG_SPU_ENABLE_LOOP) ||
+					(decoder->end_of_input && args->audio_loop_point >= 0)
+				) {
 					last_block[1] = PSX_AUDIO_SPU_LOOP_REPEAT;
 				} else if (decoder->end_of_input) {
 					// HACK: the trailing block should in theory be appended to
 					// the existing data, but it's easier to just zerofill and
-					// repurpose the last encoded block
+					// repurpose the last encoded block.
 					memset(last_block, 0, PSX_AUDIO_SPU_BLOCK_SIZE);
 					last_block[1] = PSX_AUDIO_SPU_LOOP_TRAP;
 				}
