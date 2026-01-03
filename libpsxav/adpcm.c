@@ -266,6 +266,8 @@ static inline void psx_audio_xa_sync_subheader_copy(psx_cdrom_sector_mode2_t *bu
 static void psx_audio_xa_encode_init_sector(psx_cdrom_sector_mode2_t *buffer, int lba, psx_audio_xa_settings_t settings) {
 	if (settings.format == PSX_AUDIO_XA_FORMAT_XACD)
 		psx_cdrom_init_sector((psx_cdrom_sector_t *)buffer, lba, PSX_CDROM_SECTOR_TYPE_MODE2_FORM2);
+	else if (settings.format == PSX_AUDIO_XA_FORMAT_XA)
+		psx_cdrom_init_xa_subheader(buffer->subheader, PSX_CDROM_SECTOR_TYPE_MODE2_FORM2);
 
 	buffer->subheader[0].file = settings.file_number;
 	buffer->subheader[0].channel = settings.channel_number & PSX_CDROM_SECTOR_XA_CHANNEL_MASK;
